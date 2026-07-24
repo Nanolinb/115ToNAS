@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>115 影库 · 管理端</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">🎬 115影库<small>管理端</small></div>
+  <nav class="tabs">
+    <button class="tab active" data-tab="cloud">115 网盘</button>
+    <button class="tab" data-tab="tasks">下载任务 <span id="taskBadge"></span></button>
+    <button class="tab" data-tab="settings">设置</button>
+  </nav>
+  <span style="flex:1"></span>
+  <a class="tab" href="/" style="text-decoration:none">← 观影页</a>
+</div>
+
+<main>
+  <!-- 115 网盘 -->
+  <section id="page-cloud">
+    <div id="cloudLogin" class="cloud-login hidden">
+      <h2>登录 115 网盘</h2>
+      <p style="color:var(--muted);font-size:13px;margin-top:8px">用手机 115 App 扫码授权，凭证保存在 NAS 本地</p>
+      <div><img id="qrImg" alt="二维码" class="hidden"></div>
+      <div id="qrStatus" style="color:var(--muted);font-size:13px;min-height:20px"></div>
+      <button class="btn primary" id="btnQr" style="margin-top:14px">获取登录二维码</button>
+    </div>
+    <div id="cloudBrowser" class="hidden">
+      <div class="toolbar">
+        <input type="search" id="cloudSearch" placeholder="搜索网盘文件…">
+        <button class="btn" id="btnCloudSearch">搜索</button>
+        <button class="btn" id="btnCloudRoot">返回根目录</button>
+        <span style="flex:1"></span>
+        <select id="cloudTarget"></select>
+        <button class="btn primary" id="btnEnqueue">加入下载 (<span id="selCount">0</span>)</button>
+      </div>
+      <div class="crumbs" id="cloudCrumbs"></div>
+      <div class="file-list" id="cloudList"></div>
+    </div>
+  </section>
+
+  <!-- 下载任务 -->
+  <section id="page-tasks" class="hidden">
+    <div class="toolbar">
+      <span style="color:var(--muted);font-size:13px">串行下载，保护 NAS 资源；支持断点续传</span>
+    </div>
+    <div id="taskList"></div>
+    <div class="empty hidden" id="taskEmpty">暂无下载任务</div>
+  </section>
+
+  <!-- 设置 -->
+  <section id="page-settings" class="hidden">
+    <div class="settings-grid">
+      <div class="field">
+        <label>媒体目录（点击「浏览」可在 NAS 上选择或新建文件夹）</label>
+        <div class="row"><input type="text" id="setMovieDir"><button class="btn" data-browse="setMovieDir">浏览</button></div>
+        <div class="hint">电影目录</div>
+        <div class="row" style="margin-top:8px"><input type="text" id="setTvDir"><button class="btn" data-browse="setTvDir">浏览</button></div>
+        <div class="hint">剧集目录</div>
+        <div class="row" style="margin-top:8px"><input type="text" id="setDownloadDir"><button class="btn" data-browse="setDownloadDir">浏览</button></div>
+        <div class="hint">默认下载目录（网盘页面也可临时切换）</div>
+      </div>
+      <div class="field">
+        <label>TMDB API Key（用于封面与影片信息）</label>
+        <div class="row"><input type="text" id="setTmdb" placeholder="留空则不刮削封面"></div>
+        <div class="hint">到 <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org → 设置 → API</a> 免费申请（选 Developer，2 分钟）。</div>
+      </div>
+      <div class="field">
+        <label>射手网(伪)字幕 Token（用于自动下载中文字幕）</label>
+        <div class="row"><input type="text" id="setAssrt" placeholder="留空则只使用视频旁已有的字幕"></div>
+        <div class="hint">到 <a href="https://assrt.net/usercp" target="_blank">assrt.net</a> 注册后在「个人中心 → API Token」获取。</div>
+      </div>
+      <div class="field">
+        <label>下载限速（KB/s，0 = 不限速）</label>
+        <div class="row"><input type="number" id="setSpeed" min="0" step="100"></div>
+      </div>
+      <div class="field">
+        <label>下载完成后自动刮削</label>
+        <div class="row">
+          <select id="setAutoScan" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px">
+            <option value="1">开启（推荐）</option>
+            <option value="0">关闭</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <button class="btn primary" id="btnSaveSettings">保存设置</button>
+        <span id="settingsSaved" style="color:var(--green);font-size:13px;margin-left:10px"></span>
+      </div>
+      <div class="field">
+        <label>媒体库</label>
+        <div class="row">
+          <button class="btn" id="btnScan">立即扫描媒体库</button>
+          <span id="scanStatus" style="color:var(--muted);font-size:13px;align-self:center"></span>
+        </div>
+        <div class="hint">扫描电影/剧集目录，匹配封面与字幕。下载完成会自动扫描，一般无需手动。</div>
+      </div>
+      <div class="field">
+        <label>观影页密码（可选；电视/投影仪访问观影页时使用）</label>
+        <div class="row"><input type="password" id="viewerPw" placeholder="留空 = 观影页免密"></div>
+        <div class="row" style="margin-top:8px">
+          <button class="btn" id="btnSetViewerPw">设置观影密码</button>
+          <button class="btn danger" id="btnClearViewerPw">清除（恢复免密）</button>
+        </div>
+        <div class="hint" id="viewerPwState"></div>
+      </div>
+      <div class="field">
+        <label>修改管理端密码</label>
+        <div class="row"><input type="password" id="oldPw" placeholder="原密码"></div>
+        <div class="row" style="margin-top:8px"><input type="password" id="newPw" placeholder="新密码（至少 4 位）"></div>
+        <div class="row" style="margin-top:8px"><button class="btn" id="btnChangePw">修改密码</button></div>
+      </div>
+      <div class="field">
+        <label>账号</label>
+        <div class="row">
+          <button class="btn" id="btnCloudLogout">退出 115 登录</button>
+          <button class="btn danger" id="btnLogout">退出管理端</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- 管理端登录 -->
+<div class="login-mask hidden" id="loginMask">
+  <div class="login-box">
+    <h1>🎬 管理端</h1>
+    <p id="loginHint">输入管理密码</p>
+    <input type="password" id="loginPw" placeholder="密码" autocomplete="current-password">
+    <button class="btn primary" id="btnLogin">进入</button>
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- 目录选择弹窗 -->
+<div class="modal-mask hidden" id="dirMask">
+  <div class="modal" style="max-width:520px">
+    <div class="mhead"><h3>选择目录</h3><button class="mclose" data-close="dirMask">✕</button></div>
+    <div class="mbody">
+      <div class="dir-current" id="dirCurrent"></div>
+      <div class="dir-list" id="dirList"></div>
+      <div class="row" style="display:flex;gap:8px">
+        <input type="text" id="dirNewName" placeholder="新建文件夹名称" style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:8px">
+        <button class="btn" id="btnMkdir">新建</button>
+      </div>
+      <div style="margin-top:14px;text-align:right">
+        <button class="btn primary" id="btnPickDir">选择当前目录</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/common.js"></script>
+<script src="/static/admin.js"></script>
+</body>
+</html>
