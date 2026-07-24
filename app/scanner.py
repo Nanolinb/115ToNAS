@@ -1,0 +1,154 @@
+"""媒体库扫描：遍历电影/剧集目录 → 解析文件名 → TMDB 匹配 → 本地/在线字幕。"""
+import asyncio
+import time
+from pathlib import Path
+
+from . import db, parser, subtitles, tmdb_client
+from .config import MEDIA_ROOT
+
+scan_state = {"running": False, "last": 0, "message": ""}
+_sem = asyncio.Semaphore(3)  # 限制元数据并发，保护 NAS CPU/内存
+
+
+def movie_dir() -> Path:
+    return Path(db.get_setting("movie_dir", str(MEDIA_ROOT / "movies")))
+
+
+def tv_dir() -> Path:
+    return Path(db.get_setting("tv_dir", str(MEDIA_ROOT / "tv")))
+
+
+async def scan_all():
+    if scan_state["running"]:
+        return
+    scan_state.update(running=True, message="扫描中…")
+    try:
+        await scan_directory(movie_dir(), "movie")
+        await scan_directory(tv_dir(), "tv")
+        scan_state["message"] = "扫描完成"
+    except Exception as e:
+        scan_state["message"] = f"扫描出错: {e}"
+    finally:
+        scan_state["running"] = False
+        scan_state["last"] = int(time.time())
+
+
+async def scan_directory(root: Path, lib_type: str):
+    if not root.exists():
+        return
+    seen = set()
+    for dirpath in _walk(root):
+        for f in dirpath:
+            seen.add(str(f))
+            await scan_file(f, lib_type)
+    # 标记已不存在的文件
+    for row in db.q("SELECT id, path FROM media WHERE status='ok'"):
+        if row["path"].startswith(str(root)) and row["path"] not in seen \
+                and not Path(row["path"]).exists():
+            db.exe("UPDATE media SET status='missing' WHERE id=?", (row["id"],))
+
+
+def _walk(root: Path):
+    """生成器式遍历，避免一次性加载全部路径到内存。"""
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            files = []
+            with __import__("os").scandir(current) as it:
+                for entry in it:
+                    if entry.name.startswith("."):
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        stack.append(Path(entry.path))
+                    elif entry.is_file() and parser.is_video(entry.name):
+                        files.append(Path(entry.path))
+            yield files
+        except OSError:
+            continue
+
+
+async def scan_file(path: Path, lib_type: str, force: bool = False):
+    """扫描单个文件：新文件入库 + 匹配元数据；已存在的按需更新。"""
+    try:
+        st = path.stat()
+    except OSError:
+        return
+    row = db.one("SELECT * FROM media WHERE path=?", (str(path),))
+    if row and not force and row["mtime"] == int(st.st_mtime) and row["size"] == st.st_size:
+        return
+
+    info = parser.parse(path.name)
+    is_episode = info["episode"] is not None or lib_type == "tv"
+    media_type = "episode" if is_episode else "movie"
+
+    meta = None
+    async with _sem:
+        if tmdb_client.api_key():
+            meta = await tmdb_client.match(
+                info["title"], info["year"], "tv" if is_episode else "movie")
+
+    sub = subtitles.find_local_sub(path)
+    values = {
+        "type": media_type,
+        "path": str(path),
+        "title": (meta or {}).get("title") or info["title"],
+        "year": (meta or {}).get("year") or info["year"],
+        "season": info["season"],
+        "episode": info["episode"],
+        "size": st.st_size,
+        "mtime": int(st.st_mtime),
+        "tmdb_id": (meta or {}).get("tmdb_id"),
+        "name_cn": (meta or {}).get("name_cn"),
+        "poster": (meta or {}).get("poster") or (row or {}).get("poster"),
+        "backdrop": (meta or {}).get("backdrop"),
+        "overview": (meta or {}).get("overview"),
+        "genres": (meta or {}).get("genres"),
+        "rating": (meta or {}).get("rating"),
+        "has_sub": 1 if sub else 0,
+        "sub_path": str(sub) if sub else None,
+        "status": "ok",
+        "created_at": int(time.time()),
+    }
+    if row:
+        sets = ",".join(f"{k}=?" for k in values if k != "created_at")
+        db.exe(f"UPDATE media SET {sets} WHERE id=?",
+               [values[k] for k in values if k != "created_at"] + [row["id"]])
+        media_id = row["id"]
+    else:
+        cols = ",".join(values)
+        media_id = db.exe(f"INSERT INTO media({cols}) VALUES({','.join('?' * len(values))})",
+                          list(values.values()))
+
+    # 没有本地字幕且配置了 token → 在线搜刮
+    if not sub and db.get_setting("assrt_token", "").strip():
+        db.exe("UPDATE media SET sub_status='searching' WHERE id=?", (media_id,))
+        found = await subtitles.search_and_download(
+            path, (meta or {}).get("original_title") or info["title"],
+            values["year"])
+        if not found:
+            found = await subtitles.search_and_download(
+                path, info["title"], values["year"])
+        db.exe("UPDATE media SET sub_status=?, has_sub=?, sub_path=? WHERE id=?",
+               ("ok" if found else "failed", 1 if found else 0,
+                str(found) if found else None, media_id))
+
+
+async def rematch(media_id: int, tmdb_id: int | None = None,
+                  title: str | None = None, year: int | None = None):
+    row = db.one("SELECT * FROM media WHERE id=?", (media_id,))
+    if not row:
+        return None
+    kind = "tv" if row["type"] == "episode" else "movie"
+    if tmdb_id:
+        meta = await tmdb_client.match_by_id(tmdb_id, kind)
+    else:
+        meta = await tmdb_client.match(title or row["title"], year or row["year"], kind)
+    if not meta:
+        return None
+    db.exe("""UPDATE media SET tmdb_id=?, title=?, name_cn=?, year=?, poster=?,
+              backdrop=?, overview=?, genres=?, rating=? WHERE id=?""",
+           (meta["tmdb_id"], meta["title"], meta["name_cn"], meta["year"],
+            meta["poster"] or row["poster"], meta["backdrop"], meta["overview"],
+            meta["genres"], meta["rating"], media_id))
+    return meta
