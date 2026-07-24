@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>115 影库</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="logo">🎬 115影库</div>
+  <span style="flex:1"></span>
+  <a class="tab" href="/admin" style="text-decoration:none">⚙ 管理</a>
+</div>
+
+<main>
+  <section id="page-library">
+    <div class="toolbar">
+      <input type="search" id="libSearch" placeholder="搜索标题…">
+      <select id="libType">
+        <option value="">全部类型</option>
+        <option value="movie">电影</option>
+        <option value="show">剧集</option>
+      </select>
+      <select id="libGenre"><option value="">全部题材</option></select>
+      <select id="libYear"><option value="0">全部年份</option></select>
+    </div>
+    <div class="grid" id="libGrid"></div>
+    <div class="empty hidden" id="libEmpty">
+      媒体库还是空的。<br><br>
+      请管理他到 <a href="/admin" style="color:var(--accent2)">管理端</a> 登录 115 网盘并添加下载。
+    </div>
+  </section>
+</main>
+
+<!-- 观影密码登录（仅当管理端设置了观影密码时出现） -->
+<div class="login-mask hidden" id="loginMask">
+  <div class="login-box">
+    <h1>🎬 115影库</h1>
+    <p>输入观影密码</p>
+    <input type="password" id="loginPw" placeholder="观影密码" autocomplete="current-password">
+    <button class="btn primary" id="btnLogin">进入</button>
+    <div class="login-err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- 详情弹窗 -->
+<div class="modal-mask hidden" id="detailMask">
+  <div class="modal" id="detailModal"></div>
+</div>
+
+<!-- 播放器弹窗 -->
+<div class="modal-mask hidden" id="playerMask">
+  <div class="modal player-modal">
+    <video id="playerVideo" controls playsinline></video>
+    <div class="player-bar">
+      <span class="fname" id="playerName"></span>
+      <button class="btn small" id="btnCopyLink">复制直链</button>
+      <button class="btn small" id="btnDownloadFile">下载文件</button>
+      <button class="btn small" id="btnClosePlayer">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/common.js"></script>
+<script src="/static/viewer.js"></script>
+</body>
+</html>
