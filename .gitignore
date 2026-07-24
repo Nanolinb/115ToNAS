@@ -1,0 +1,12 @@
+# 运行期数据（不要提交）
+config/
+.test/
+.venv/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# 系统
+.DS_Store

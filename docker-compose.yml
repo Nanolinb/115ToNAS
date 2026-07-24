@@ -1,0 +1,25 @@
+# QNAP Container Station 可直接导入本文件（应用程序 → 创建 → 粘贴 YAML）
+services:
+  media-hub:
+    build: .
+    image: 115-media-hub:latest
+    container_name: media-hub-115
+    restart: unless-stopped
+    ports:
+      - "8115:8115"
+    environment:
+      TZ: Asia/Shanghai
+    volumes:
+      # 左边是 NAS 上的真实共享文件夹路径，按需修改；
+      # 右边 /media 是容器内固定挂载点，不要改
+      - /share/Multimedia/115Download:/media
+      # 配置与数据库（cookies、海报缓存）保存在项目目录下，随项目备份
+      - ./config:/config
+    # 资源限制：给其它容器留余量（TS-453D 8G）
+    mem_limit: 512m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "2"
