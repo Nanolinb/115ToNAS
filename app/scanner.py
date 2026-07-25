@@ -1,11 +1,12 @@
 """媒体库扫描：遍历电影/剧集目录 → 解析文件名 → TMDB 匹配 → 本地/在线字幕。"""
 import asyncio
 import json
+import shutil
 import time
 from pathlib import Path
 
 from . import db, parser, subtitles, tmdb_client
-from .config import MEDIA_ROOT
+from .config import MEDIA_ROOT, POSTER_DIR
 
 scan_state = {"running": False, "last": 0, "message": ""}
 _sem = asyncio.Semaphore(3)  # 限制元数据并发，保护 NAS CPU/内存
@@ -127,6 +128,16 @@ async def scan_file(path: Path, lib_type: str, force: bool = False):
         cols = ",".join(values)
         media_id = db.exe(f"INSERT INTO media({cols}) VALUES({','.join('?' * len(values))})",
                           list(values.values()))
+
+    # 封面同时落一份到视频所在目录（poster.jpg，Kodi/Plex 风格，方便管理）
+    if values["poster"]:
+        try:
+            src = POSTER_DIR / values["poster"]
+            dst = path.parent / "poster.jpg"
+            if src.exists() and not dst.exists():
+                shutil.copyfile(src, dst)
+        except OSError:
+            pass
 
     # 缺字幕语言（简中/英文/双语）且配置了 token → 在线补刮
     if db.get_secret("assrt_token", "").strip():

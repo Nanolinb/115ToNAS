@@ -31,10 +31,16 @@ def add_tasks(items: list[dict], target_dir: str) -> int:
                      (it.get("pickcode"),))
         if dup:
             continue
+        # rel：还原 115 目录结构（如 剧集名/Season 1），防目录穿越
+        rel = (it.get("rel") or "").strip("/")
+        if rel and ".." not in rel.split("/"):
+            tdir = str(Path(target_dir) / rel)
+        else:
+            tdir = target_dir
         db.exe("""INSERT INTO tasks(id,name,pickcode,file_id,target_dir,size,status,created_at,updated_at)
                   VALUES(?,?,?,?,?,?,'queued',?,?)""",
                (uuid.uuid4().hex[:12], it["name"], it.get("pickcode", ""),
-                str(it.get("id", "")), target_dir, it.get("size", 0),
+                str(it.get("id", "")), tdir, it.get("size", 0),
                 db.now(), db.now()))
         n += 1
     return n
