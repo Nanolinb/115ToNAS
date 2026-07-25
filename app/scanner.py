@@ -112,6 +112,12 @@ async def scan_file(path: Path, lib_type: str, force: bool = False):
         "status": "ok",
         "created_at": int(time.time()),
     }
+    # TMDB 没刮到封面 → 百度图片兜底（国内可直连）
+    if not values["poster"]:
+        from . import baiduimg
+        values["poster"] = await baiduimg.poster_for(
+            (meta or {}).get("name_cn") or values["title"], values["year"])
+
     if row:
         sets = ",".join(f"{k}=?" for k in values if k != "created_at")
         db.exe(f"UPDATE media SET {sets} WHERE id=?",

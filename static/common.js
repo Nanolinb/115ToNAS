@@ -73,35 +73,42 @@ async function playMedia(id) {
   $('#playerName').textContent = d.filename;
   $('#playerMask').classList.remove('hidden');
   setupAudioMenu(id, video);
+  // 签名播放链接：外部播放器（IINA/VLC/电视）没有登录 Cookie，用 24h 签名令牌
+  let playUrl = `${location.origin}/api/stream/${id}`;
+  try {
+    const pl = await api(`/api/media/${id}/playlink`);
+    playUrl = location.origin + pl.url;
+  } catch (e) {}
   // 安卓 TV App 内（原生桥存在时）：提供「外部播放器」通道，
   // 由电视/投影仪自己的播放器硬解，支持内嵌多音轨/字幕切换
   const extBtn = $('#btnExternal');
   if (window.MediaHubNative && typeof MediaHubNative.play === 'function') {
     extBtn.classList.remove('hidden');
     extBtn.onclick = () => {
-      MediaHubNative.play(`${location.origin}/api/stream/${id}`, d.filename);
+      MediaHubNative.play(playUrl, d.filename);
     };
   } else {
     extBtn.classList.add('hidden');
   }
-  // Mac Safari 不支持 MKV/AVI 等容器 → 显示「用 IINA 打开」（iina:// URL scheme）
+  // Mac 的浏览器不支持 MKV/AVI 等容器 → 显示「用 IINA 打开」（复制签名链接 + 指引）
   const iinaBtn = $('#btnIina');
-  const isMacSafari = /Macintosh/.test(navigator.userAgent) &&
-    /Safari/.test(navigator.userAgent) && !/Chrome|Edg/.test(navigator.userAgent);
+  const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
   const nativeOk = /\.(mp4|m4v|mov|webm)(\?|$)/i.test(d.filename || '');
-  if (isMacSafari && !nativeOk) {
+  if (isMac && !nativeOk) {
     iinaBtn.classList.remove('hidden');
-    iinaBtn.href = 'iina://open?url=' +
-      encodeURIComponent(`${location.origin}/api/stream/${id}`);
+    iinaBtn.onclick = async () => {
+      try { await navigator.clipboard.writeText(playUrl); }
+      catch (e) { prompt('复制此播放地址:', playUrl); }
+      toast('播放地址已复制 → 打开 IINA，菜单「文件 → 打开URL…(⌘U)」粘贴即可（未安装：iina.io 免费下载）', 4500);
+    };
   } else {
     iinaBtn.classList.add('hidden');
   }
   $('#btnCopyLink').onclick = async () => {
-    const url = `${location.origin}/api/stream/${id}`;
-    try { await navigator.clipboard.writeText(url); toast('直链已复制（可粘贴到极米/Infuse 等播放器）'); }
-    catch (e) { prompt('复制此直链:', url); }
+    try { await navigator.clipboard.writeText(playUrl); toast('直链已复制（可粘贴到极米/Infuse 等播放器）'); }
+    catch (e) { prompt('复制此直链:', playUrl); }
   };
-  $('#btnDownloadFile').onclick = () => { window.open(`/api/stream/${id}`, '_blank'); };
+  $('#btnDownloadFile').onclick = () => { window.open(playUrl, '_blank'); };
   video.play().catch(() => {});
 }
 
