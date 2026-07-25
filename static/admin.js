@@ -140,6 +140,8 @@ async function loadCloudList(cid) {
     return;
   }
   state.cloud.cid = cid;
+  // 记录每项所在目录，下载单文件时用来找同目录字幕
+  data.items.forEach((it) => { it.parent_cid = cid; });
   state.cloud.items = data.items;
   if (data.path && data.path.length) {
     state.cloud.path = data.path;
@@ -321,7 +323,6 @@ async function saveSettings() {
     },
   });
   state.settings = await api('/api/settings');
-  renderTmdbNet();
   $('#settingsSaved').textContent = '已保存 ✓';
   setTimeout(() => { $('#settingsSaved').textContent = ''; }, 2500);
 }
