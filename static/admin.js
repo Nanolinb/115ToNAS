@@ -163,6 +163,7 @@ async function searchCloud() {
 }
 
 const VIDEO_EXT_RE = /\.(mp4|mkv|avi|mov|wmv|flv|ts|m2ts|mpg|mpeg|rmvb|rm|vob|webm|f4v|3gp)$/i;
+const SUB_EXT_RE = /\.(srt|ass|ssa|sub|vtt)$/i;
 
 function renderCloud(isSearch = false) {
   const crumbs = $('#cloudCrumbs');
@@ -184,11 +185,12 @@ function renderCloud(isSearch = false) {
   }
   list.innerHTML = state.cloud.items.map((it, i) => {
     const playable = VIDEO_EXT_RE.test(it.name);
-    const checkable = it.is_dir || playable;
+    const isSub = SUB_EXT_RE.test(it.name);
+    const checkable = it.is_dir || playable || isSub;
     const checked = state.cloud.selected.has(it.id + it.name) ? 'checked' : '';
     return `<div class="file-row ${checkable ? '' : 'dim'}">
       <input type="checkbox" data-i="${i}" ${checkable ? '' : 'disabled'} ${checked}>
-      <span class="icon">${it.is_dir ? '📁' : (playable ? '🎞️' : '📄')}</span>
+      <span class="icon">${it.is_dir ? '📁' : (playable ? '🎞️' : (isSub ? '💬' : '📄'))}</span>
       <span class="fname ${it.is_dir ? 'clickable' : ''}" data-i="${i}">${esc(it.name)}</span>
       <span class="fsize">${it.is_dir ? '' : fmtSize(it.size)}</span>
     </div>`;

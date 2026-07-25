@@ -1,13 +1,14 @@
 """字幕模块：
-1. 本地匹配：视频旁已有同名字幕直接挂上；
+1. 本地匹配：视频旁已有同名字幕直接挂上（严格前缀 + 模糊匹配）；
 2. 在线搜刮：射手网(伪) assrt.net 开放 API（需要在设置里填免费 token）。
 """
+import re
 from pathlib import Path
 
 import httpx
 
 from . import db
-from .parser import SUB_EXTS
+from .parser import SUB_EXTS, _TAG_RE
 
 ASSRT = "https://api.assrt.net/v1"
 
@@ -31,6 +32,39 @@ def _detect_lang(infix: str) -> str:
     return "zh"
 
 
+# 集数标记：S01E02 / E02 / EP02 / 第2集 —— 模糊匹配时剧集必须集数一致，防错挂
+_EP_KEY_RE = re.compile(
+    r"[Ss](\d{1,2})[ ._-]*[Ee](\d{1,3})|[Ee][Pp]?(\d{1,3})|第\s*(\d{1,3})\s*[集话回]")
+
+
+def _ep_key(stem: str) -> str | None:
+    m = _EP_KEY_RE.search(stem)
+    if not m:
+        return None
+    if m.group(1) is not None:
+        return f"s{int(m.group(1)):02d}e{int(m.group(2)):03d}"
+    return f"e{int(m.group(3) or m.group(4)):03d}"
+
+
+def _norm(stem: str) -> str:
+    """归一化文件名主干：去集数标记与发布标签（1080p/BluRay/x265…），只留字母数字与中文。"""
+    t = _EP_KEY_RE.sub(" ", stem)
+    t = _TAG_RE.sub(" ", t)
+    return re.sub(r"[^0-9a-zA-Z一-鿿]+", "", t).lower()
+
+
+def _fuzzy_match(video_stem: str, sub_stem: str) -> bool:
+    """模糊匹配：任一方有集数标记 → 两边集数必须一致；
+    否则（电影）归一化后互为前缀即匹配（Movie.2020.1080p ≈ Movie.2020.zh）。"""
+    vek, sek = _ep_key(video_stem), _ep_key(sub_stem)
+    if vek or sek:
+        return bool(vek and sek and vek == sek)
+    a, b = _norm(video_stem), _norm(sub_stem)
+    if not a or not b:
+        return False
+    return a.startswith(b) or b.startswith(a)
+
+
 def find_local_sub(video_path: Path) -> Path | None:
     """查找视频旁边的同名字幕（含 .zh/.chs/.cht/.sc 等中缀）。"""
     tracks = find_all_local_subs(video_path)
@@ -38,23 +72,33 @@ def find_local_sub(video_path: Path) -> Path | None:
 
 
 def find_all_local_subs(video_path: Path) -> list:
-    """扫描视频旁全部同名字幕，识别为轨道列表 [{lang,label,path}]。每种语言取第一个。"""
+    """扫描视频旁全部同名字幕，识别为轨道列表 [{lang,label,path}]。每种语言取第一个。
+    匹配优先级：严格前缀（同名）> 模糊匹配 > 可播格式（vtt/srt 优先于 ass）。"""
     stem = video_path.stem.lower()
     out = []
     try:
         for f in sorted(video_path.parent.iterdir()):
-            if f.suffix.lower() in SUB_EXTS and f.stem.lower().startswith(stem):
-                infix = f.stem.lower()[len(stem):]
-                lang = _detect_lang(infix)
-                out.append({"lang": lang, "label": LANG_META[lang], "path": str(f)})
+            if f.suffix.lower() not in SUB_EXTS:
+                continue
+            fstem = f.stem.lower()
+            exact = fstem.startswith(stem)
+            if not exact and not _fuzzy_match(video_path.stem, f.stem):
+                continue
+            lang = _detect_lang(fstem[len(stem):] if exact else fstem)
+            out.append({"lang": lang, "label": LANG_META[lang], "path": str(f),
+                        "_rank": 0 if exact else 1,
+                        "_dlen": len(fstem) - len(stem) if exact else len(fstem)})
     except OSError:
         pass
-    # 同一语言可能同时有 .ass 和 .srt：浏览器 <track> 只认 srt/vtt，优先可播格式
+    # 同一语言可能有多条候选：严格同名 > 模糊匹配 > 与视频名最接近（中缀短）> 可播格式
     fmt_rank = {".vtt": 0, ".srt": 1}
     seen, uniq = set(), []
-    for t in sorted(out, key=lambda t: (t["lang"], fmt_rank.get(Path(t["path"]).suffix.lower(), 2))):
+    for t in sorted(out, key=lambda t: (t["lang"], t["_rank"], t["_dlen"],
+                                        fmt_rank.get(Path(t["path"]).suffix.lower(), 2))):
         if t["lang"] not in seen:
             seen.add(t["lang"])
+            t.pop("_rank")
+            t.pop("_dlen")
             uniq.append(t)
     return uniq
 

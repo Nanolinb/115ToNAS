@@ -602,7 +602,7 @@ async def cloud_download(request: Request):
         raise HTTPException(400, "未选择文件")
 
     async def expand_and_enqueue():
-        from .parser import is_video, parse
+        from .parser import is_subtitle, is_video, parse
         added = skipped = 0
         for it in items:
             if it.get("is_dir"):
@@ -626,6 +626,9 @@ async def cloud_download(request: Request):
                     except CloudError:
                         pass
                 a, s = downloader.add_tasks(_pair_subs(batch, drop_unmatched=True), target)
+            elif is_subtitle(it["name"]):
+                # 单选字幕：直接落到目标目录根，配对交给扫描器（严格+模糊）
+                a, s = downloader.add_tasks([{**it, "rel": ""}], target)
             else:
                 continue
             added += a
