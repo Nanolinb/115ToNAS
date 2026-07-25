@@ -471,6 +471,12 @@ async def task_control(task_id: str, action: str):
 
 SETTING_KEYS = ("movie_dir", "tv_dir", "download_dir", "tmdb_key",
                 "assrt_token", "speed_limit", "auto_scan")
+SECRET_SETTING_KEYS = ("tmdb_key", "assrt_token")
+MASK = "****"
+
+
+def _mask_secret(v: str) -> str:
+    return (MASK + v[-4:]) if v else ""
 
 
 @app.get("/api/settings")
@@ -483,15 +489,28 @@ async def get_settings():
         "tmdb_key": "", "assrt_token": "",
         "speed_limit": "0", "auto_scan": "1",
     }
-    return {k: db.get_setting(k, v) for k, v in defaults.items()}
+    out = {}
+    for k, dft in defaults.items():
+        if k in SECRET_SETTING_KEYS:
+            out[k] = _mask_secret(db.get_secret(k, dft))
+        else:
+            out[k] = db.get_setting(k, dft)
+    return out
 
 
 @app.post("/api/settings")
 async def save_settings(request: Request):
     body = await request.json()
     for k in SETTING_KEYS:
-        if k in body:
-            db.set_setting(k, str(body[k]).strip())
+        if k not in body:
+            continue
+        v = str(body[k]).strip()
+        if k in SECRET_SETTING_KEYS:
+            if v.startswith(MASK):
+                continue  # 掩码原样回传 = 未修改
+            db.set_secret(k, v)
+        else:
+            db.set_setting(k, v)
     return {"ok": True}
 
 
