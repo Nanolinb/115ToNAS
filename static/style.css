@@ -190,6 +190,8 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .field input:focus { border-color: var(--accent); }
 .field .hint { color: var(--muted); font-size: 12px; margin-top: 8px; line-height: 1.6; }
 .field .hint a { color: var(--accent2); }
+input.warn { border-color: rgba(224, 93, 93, .55); }
+input.warn::placeholder { color: rgba(224, 93, 93, .75); }
 
 /* ---------- 登录 ---------- */
 .login-mask {

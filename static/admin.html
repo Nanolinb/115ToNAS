@@ -82,7 +82,7 @@
       <div class="field">
         <label>网络代理（仅 TMDB 封面刮削使用；115 与字幕直连，不走代理）</label>
         <div class="row"><input type="text" id="setProxy" placeholder="例：http://192.168.1.100:7890；留空 = 直连"></div>
-        <div class="hint">填你 Mac / 路由器上代理软件的「允许局域网连接」地址与端口。TMDB 在国内不可直连，需要代理才能刮削封面与影片信息。</div>
+        <div class="hint" id="proxyHint">填你 Mac / 路由器上代理软件的「允许局域网连接」地址与端口。TMDB 刮削每次都会先试直连，失败才走代理。</div>
       </div>
       <div class="field">
         <label>射手网(伪)字幕 Token（用于自动搜刮中文/英文/双语字幕）</label>
