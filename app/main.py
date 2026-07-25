@@ -11,7 +11,7 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, db, downloader, scanner, subtitles, tmdb_client
+from . import auth, baiduimg, db, downloader, scanner, subtitles, tmdb_client
 from .cloud115 import cloud, CloudError
 from .config import MEDIA_ROOT, POSTER_DIR
 
@@ -43,6 +43,7 @@ PUBLIC_PREFIXES = ("/api/auth/",)
 VIEWER_GET_EXACT = ("/api/library",)
 VIEWER_PREFIXES = ("/api/poster/", "/api/stream/", "/api/subtitle/")
 _VIEWER_MEDIA_RE = re.compile(r"^/api/media/\d+$")
+_VIEWER_PLAYLINK_RE = re.compile(r"^/api/media/\d+/playlink$")
 
 
 @app.middleware("http")
@@ -53,6 +54,7 @@ async def auth_middleware(request: Request, call_next):
     is_viewer = request.method == "GET" and (
         path in VIEWER_GET_EXACT
         or bool(_VIEWER_MEDIA_RE.match(path))
+        or bool(_VIEWER_PLAYLINK_RE.match(path))
         or any(path.startswith(p) for p in VIEWER_PREFIXES)
     )
     try:
@@ -294,6 +296,17 @@ async def media_tracks(media_id: int):
             "subtitle": types.count("subtitle")}
 
 
+@app.get("/api/media/{media_id}/playlink")
+async def media_playlink(media_id: int):
+    """签名播放链接：IINA/VLC/电视等外部播放器无 Cookie，用 ?pt= 令牌鉴权，24 小时有效。"""
+    row = db.one("SELECT id FROM media WHERE id=?", (media_id,))
+    if not row:
+        raise HTTPException(404, "not found")
+    token = auth.make_play_token(media_id)
+    return {"url": f"/api/stream/{media_id}?pt={token}",
+            "expires_in": auth.PLAY_LINK_TTL}
+
+
 @app.get("/api/media/{media_id}/tmdb_candidates")
 async def tmdb_candidates(media_id: int, q: str = ""):
     row = db.one("SELECT * FROM media WHERE id=?", (media_id,))
@@ -338,6 +351,37 @@ async def media_subtitle(media_id: int):
 async def media_remove(media_id: int):
     db.exe("DELETE FROM media WHERE id=?", (media_id,))
     return {"ok": True}
+
+
+# ---------------- 封面（百度图片源，国内直连） ----------------
+
+@app.get("/api/media/{media_id}/poster_candidates")
+async def poster_candidates(media_id: int, q: str = ""):
+    row = db.one("SELECT title, name_cn, year FROM media WHERE id=?", (media_id,))
+    if not row:
+        raise HTTPException(404, "not found")
+    query = q.strip() or f"{row['name_cn'] or row['title']} {row['year'] or ''} 海报"
+    return {"items": await baiduimg.search_posters(query, 15), "query": query}
+
+
+@app.post("/api/media/{media_id}/poster")
+async def set_poster(media_id: int, request: Request):
+    row = db.one("SELECT id, type, tmdb_id FROM media WHERE id=?", (media_id,))
+    if not row:
+        raise HTTPException(404, "not found")
+    body = await request.json()
+    url = (body.get("url") or "").strip()
+    if not url.startswith("http"):
+        raise HTTPException(400, "无效的图片地址")
+    fname = await baiduimg.download_poster(url)
+    if not fname:
+        raise HTTPException(502, "封面下载失败，换一张试试")
+    db.exe("UPDATE media SET poster=? WHERE id=?", (fname, media_id))
+    # 剧集：同剧其它集共享同一封面
+    if row["type"] == "episode" and row["tmdb_id"]:
+        db.exe("UPDATE media SET poster=? WHERE tmdb_id=?",
+               (fname, row["tmdb_id"]))
+    return {"ok": True, "poster": fname}
 
 
 # ---------------- 海报 / 流媒体 / 字幕 ----------------
