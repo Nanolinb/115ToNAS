@@ -1,19 +1,33 @@
 # QNAP Container Station 可直接导入本文件（应用程序 → 创建 → 粘贴 YAML）
+# 网络适配说明见 DEPLOY-QNAP.md
 services:
   media-hub:
     build: .
     image: 115-media-hub:latest
     container_name: media-hub-115
     restart: unless-stopped
-    ports:
-      - "8115:8115"
+    # 主机网络：绕过 QTS 容器虚拟网关（实测不稳定），流媒体少一层 NAT
+    network_mode: host
+    # 115 API 可达 IP 固定（默认解析 IP 被封的环境需要；IP 失效时按 DEPLOY-QNAP.md 更新）
+    extra_hosts:
+      - "qrcodeapi.115.com:47.113.24.196"
+      - "webapi.115.com:47.113.24.196"
+      - "proapi.115.com:47.113.24.196"
+      - "userapi.115.com:47.113.24.196"
+      - "passportapi.115.com:47.113.24.196"
+      - "uplb.115.com:47.113.24.196"
+    dns:
+      - 223.5.5.5
+      - 119.29.29.29
     environment:
       TZ: Asia/Shanghai
+      # 如需走代理访问 TMDB，取消下一行注释并填局域网代理地址
+      # HTTPS_PROXY: http://192.168.1.100:7890
     volumes:
       # 左边是 NAS 上的真实共享文件夹路径，按需修改；
       # 右边 /media 是容器内固定挂载点，不要改
-      - /share/Multimedia/115Download:/media
-      # 配置与数据库（cookies、海报缓存）保存在项目目录下，随项目备份
+      - /share/Multimedia:/media
+      # 配置与数据库（含加密密钥、海报缓存）保存在项目目录下，随项目备份
       - ./config:/config
     # 资源限制：给其它容器留余量（TS-453D 8G）
     mem_limit: 512m
