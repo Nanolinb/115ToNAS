@@ -55,6 +55,13 @@ function bindModalClosers(root) {
 
 /* ---------- 播放器（观影端用） ---------- */
 
+// 浏览器（Chrome/Edge/Safari 的 HTML5 <video>）能解的音频编码；
+// ac3/eac3/dts/truehd 等只有 Safari 部分支持、Chrome 一律无声
+const BROWSER_AUDIO_OK = new Set([
+  'aac', 'mp3', 'opus', 'vorbis', 'flac', 'alac', 'mp2',
+  'pcm_s16le', 'pcm_s24le', 'pcm_f32le', 'pcm_u8',
+]);
+
 async function playMedia(id) {
   const d = await api(`/api/media/${id}`);
   const video = $('#playerVideo');
@@ -72,13 +79,40 @@ async function playMedia(id) {
   });
   $('#playerName').textContent = d.filename;
   $('#playerMask').classList.remove('hidden');
-  setupAudioMenu(id, video);
+
   // 签名播放链接：外部播放器（IINA/VLC/电视）没有登录 Cookie，用 24h 签名令牌
   let playUrl = `${location.origin}/api/stream/${id}`;
   try {
     const pl = await api(`/api/media/${id}/playlink`);
     playUrl = location.origin + pl.url;
   } catch (e) {}
+
+  // 轨道信息（音轨数 + 音频编码）
+  let info = { available: false, audio: 0, audio_codecs: [] };
+  try { info = await api(`/api/media/${id}/tracks`); } catch (e) {}
+  setupAudioMenu(video, info);
+
+  const badCodecs = (info.audio_codecs || []).filter((c) => !BROWSER_AUDIO_OK.has(c));
+  const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
+  const nativeOk = /\.(mp4|m4v|mov|webm)(\?|$)/i.test(d.filename || '');
+
+  // Mac 上：容器不支持 或 音频编码浏览器解不了 → 提供「用 IINA 打开」（直接拉起）
+  const iinaBtn = $('#btnIina');
+  if (isMac && (!nativeOk || badCodecs.length)) {
+    iinaBtn.classList.remove('hidden');
+    iinaBtn.onclick = async () => {
+      try { await navigator.clipboard.writeText(playUrl); } catch (e) {}
+      toast('正在拉起 IINA…（若没反应：链接已复制，IINA 里 ⌘U 粘贴即可）', 3500);
+      window.location.href = 'iina://open?url=' + encodeURIComponent(playUrl);
+    };
+  } else {
+    iinaBtn.classList.add('hidden');
+  }
+  if (badCodecs.length) {
+    toast(`音频编码 ${[...new Set(badCodecs)].join(' / ')} 浏览器无法解码（会无声）→ ` +
+      (isMac ? '点「🍎 用 IINA 打开」' : '请用「电视播放器」或复制直链到 VLC / Infuse'), 5000);
+  }
+
   // 安卓 TV App 内（原生桥存在时）：提供「外部播放器」通道，
   // 由电视/投影仪自己的播放器硬解，支持内嵌多音轨/字幕切换
   const extBtn = $('#btnExternal');
@@ -89,20 +123,6 @@ async function playMedia(id) {
     };
   } else {
     extBtn.classList.add('hidden');
-  }
-  // Mac 的浏览器不支持 MKV/AVI 等容器 → 显示「用 IINA 打开」（复制签名链接 + 指引）
-  const iinaBtn = $('#btnIina');
-  const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
-  const nativeOk = /\.(mp4|m4v|mov|webm)(\?|$)/i.test(d.filename || '');
-  if (isMac && !nativeOk) {
-    iinaBtn.classList.remove('hidden');
-    iinaBtn.onclick = async () => {
-      try { await navigator.clipboard.writeText(playUrl); }
-      catch (e) { prompt('复制此播放地址:', playUrl); }
-      toast('播放地址已复制 → 打开 IINA，菜单「文件 → 打开URL…(⌘U)」粘贴即可（未安装：iina.io 免费下载）', 4500);
-    };
-  } else {
-    iinaBtn.classList.add('hidden');
   }
   $('#btnCopyLink').onclick = async () => {
     try { await navigator.clipboard.writeText(playUrl); toast('直链已复制（可粘贴到极米/Infuse 等播放器）'); }
@@ -120,14 +140,10 @@ function closePlayer() {
 
 /* ---------- 音轨菜单 ---------- */
 
-async function setupAudioMenu(id, video) {
+function setupAudioMenu(video, info) {
   const sel = $('#audioTrackSel');
   sel.classList.remove('hidden');
-  sel.disabled = true;
-  sel.innerHTML = '<option>检测音轨…</option>';
-  let info = { available: false, audio: 0 };
-  try { info = await api(`/api/media/${id}/tracks`); } catch (e) {}
-  const n = info.audio || 0;
+  const n = (info && info.audio) || 0;
   // 浏览器里只有 Safari 实现了 audioTracks；Chrome/WebView 不支持网页内切音轨
   const canSwitch = !!video.audioTracks && n > 1;
   if (canSwitch) {
@@ -141,6 +157,7 @@ async function setupAudioMenu(id, video) {
     };
     sel.title = '切换内嵌音轨';
   } else {
+    sel.disabled = true;
     sel.innerHTML = `<option>${n > 1 ? n + ' 条音轨' : '单音轨'}</option>`;
     sel.title = n > 1
       ? '当前浏览器不支持网页内切换音轨（仅 Safari 支持）；请用「电视播放器」或复制直链到 IINA / Infuse / VLC 切换'
