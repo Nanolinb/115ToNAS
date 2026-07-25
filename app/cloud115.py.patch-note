@@ -1,0 +1,51 @@
+    async def iter_video_files(self, cid: str, depth: int = 0, max_depth: int = 4):
+        """递归遍历文件夹内的视频文件（用于整文件夹加入下载）。"""
+        from .parser import is_video
+        offset = 0
+        while True:
+            page = await self.list_files(cid, offset=offset, limit=200)
+            for it in page["items"]:
+                if it["is_dir"]:
+                    if depth < max_depth:
+                        async for sub in self.iter_video_files(it["id"], depth + 1, max_depth):
+                            yield sub
+                elif is_video(it["name"]):
+                    yield it
+            if offset + 200 >= page["count"]:
+                break
+            offset += 200
+
+    async def iter_media_files(self, cid: str, root_name: str, depth: int = 0,
+                               max_depth: int = 4, rel: str = ""):
+        """递归遍历文件夹：视频 + 同目录字幕一起产出，
+        每项附带 rel（相对目录，含根文件夹名），下载时还原 115 的目录结构。"""
+        from .parser import is_subtitle, is_video
+        base = f"{rel}/{root_name}" if rel else root_name
+        offset = 0
+        while True:
+            page = await self.list_files(cid, offset=offset, limit=200)
+            for it in page["items"]:
+                if it["is_dir"]:
+                    if depth < max_depth:
+                        async for sub in self.iter_media_files(
+                                it["id"], it["name"], depth + 1, max_depth, base):
+                            yield sub
+                elif is_video(it["name"]) or is_subtitle(it["name"]):
+                    yield {**it, "rel": base}
+            if offset + 200 >= page["count"]:
+                break
+            offset += 200
+
+    async def list_sibling_subs(self, cid: str) -> list:
+        """列出指定目录下全部字幕文件（用于单选视频时寻找同片字幕）。"""
+        from .parser import is_subtitle
+        subs, offset = [], 0
+        while True:
+            page = await self.list_files(cid, offset=offset, limit=200)
+            for it in page["items"]:
+                if not it["is_dir"] and is_subtitle(it["name"]):
+                    subs.append(it)
+            if offset + 200 >= page["count"]:
+                break
+            offset += 200
+        return subs
