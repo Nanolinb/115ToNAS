@@ -273,7 +273,7 @@ async def media_detail(media_id: int):
 
 @app.get("/api/media/{media_id}/tracks")
 async def media_tracks(media_id: int):
-    """ffprobe 探测内嵌音轨/字幕数量（网页音轨菜单用）。"""
+    """ffprobe 探测内嵌音轨/字幕数量与音频编码（网页音轨菜单与无声提示用）。"""
     row = db.one("SELECT path FROM media WHERE id=?", (media_id,))
     if not row:
         raise HTTPException(404, "not found")
@@ -282,18 +282,24 @@ async def media_tracks(media_id: int):
         raise HTTPException(404, "文件不存在")
     try:
         proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+            "ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name",
             "-of", "csv=p=0", str(path),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
     except FileNotFoundError:
-        return {"available": False, "audio": 0, "subtitle": 0}
+        return {"available": False, "audio": 0, "subtitle": 0, "audio_codecs": []}
     except asyncio.TimeoutError:
-        return {"available": False, "audio": 0, "subtitle": 0}
-    types = out.decode(errors="ignore").split()
-    return {"available": True,
-            "audio": types.count("audio"),
-            "subtitle": types.count("subtitle")}
+        return {"available": False, "audio": 0, "subtitle": 0, "audio_codecs": []}
+    audio_codecs, sub_n = [], 0
+    for line in out.decode(errors="ignore").splitlines():
+        parts = [p.strip() for p in line.split(",") if p.strip()]
+        if "audio" in parts:
+            codec = next((p for p in parts if p != "audio"), "")
+            audio_codecs.append(codec)
+        elif "subtitle" in parts:
+            sub_n += 1
+    return {"available": True, "audio": len(audio_codecs),
+            "subtitle": sub_n, "audio_codecs": audio_codecs}
 
 
 @app.get("/api/media/{media_id}/playlink")
@@ -549,6 +555,42 @@ async def cloud_search(q: str):
         raise HTTPException(502, str(e))
 
 
+# 字幕语言中缀：Movie.zh.srt / Movie.en.ass / Movie.zh-en.srt 等
+_LANG_INFIX_RE = re.compile(r"\.(zh(?:-en)?|en|eng|chs|cht|zho|chi|sc|tc)$", re.IGNORECASE)
+_BAD_DIR_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _safe_dirname(name: str) -> str:
+    cleaned = _BAD_DIR_CHARS.sub(" ", name)
+    return re.sub(r"\s{2,}", " ", cleaned).strip(" .") or "未命名"
+
+
+def _pair_subs(batch: list, drop_unmatched: bool = False) -> list:
+    """字幕与视频按（相对目录 + 文件名主干）配对；
+    配对成功的字幕改名为 <视频主干><语言中缀>.<扩展名>，保证扫描器能识别。"""
+    from .parser import is_video
+    vids = {(b.get("rel", ""), Path(b["name"]).stem.lower()): b
+            for b in batch if is_video(b["name"])}
+    out = [b for b in batch if is_video(b["name"])]
+    for b in batch:
+        if is_video(b["name"]):
+            continue
+        stem = Path(b["name"]).stem
+        ext = Path(b["name"]).suffix
+        base = _LANG_INFIX_RE.sub("", stem)
+        v = None
+        for cand in (stem.lower(), base.lower()):
+            v = vids.get((b.get("rel", ""), cand))
+            if v:
+                break
+        if v:
+            infix = stem[len(base):]  # ".zh" / ".en" 等，可能为空
+            out.append({**b, "name": f"{Path(v['name']).stem}{infix}{ext}"})
+        elif not drop_unmatched:
+            out.append(b)
+    return out
+
+
 @app.post("/api/cloud/download")
 async def cloud_download(request: Request):
     body = await request.json()
@@ -559,18 +601,31 @@ async def cloud_download(request: Request):
         raise HTTPException(400, "未选择文件")
 
     async def expand_and_enqueue():
-        from .parser import is_video
-        flat = []
+        from .parser import is_video, parse
+        n = 0
         for it in items:
             if it.get("is_dir"):
+                # 整文件夹：视频 + 同目录字幕，还原 115 目录结构
                 try:
-                    async for v in cloud.iter_video_files(it["id"]):
-                        flat.append(v)
+                    batch = [v async for v in
+                             cloud.iter_media_files(it["id"], _safe_dirname(it["name"]))]
                 except CloudError:
-                    pass
+                    continue
+                n += downloader.add_tasks(_pair_subs(batch), target)
             elif is_video(it["name"]):
-                flat.append(it)
-        return downloader.add_tasks(flat, target)
+                # 单选视频：剧集自动按剧名建文件夹；顺带拉同目录同名字幕
+                info = parse(it["name"])
+                rel = _safe_dirname(info["title"]) if info["episode"] is not None else ""
+                batch = [{**it, "rel": rel}]
+                pcid = it.get("parent_cid")
+                if pcid:
+                    try:
+                        batch += [{**s, "rel": rel}
+                                  for s in await cloud.list_sibling_subs(pcid)]
+                    except CloudError:
+                        pass
+                n += downloader.add_tasks(_pair_subs(batch, drop_unmatched=True), target)
+        return n
 
     n = await expand_and_enqueue()
     return {"queued": n, "target_dir": target}
