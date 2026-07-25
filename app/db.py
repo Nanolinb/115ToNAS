@@ -61,6 +61,13 @@ CREATE TABLE IF NOT EXISTS tasks (
     created_at INTEGER,
     updated_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS downloads (
+    pickcode   TEXT PRIMARY KEY,       -- 115 文件唯一标识
+    name       TEXT,
+    path       TEXT,                   -- 落盘绝对路径（容器内）
+    size       INTEGER DEFAULT 0,
+    done_at    INTEGER
+);
 """
 
 

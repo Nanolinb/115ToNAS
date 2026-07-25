@@ -10,6 +10,7 @@ const state = {
   qrTimer: null,
   dirPickTarget: null,
   dirPath: '',
+  fs: { path: '', parent: null, selected: new Map() },
 };
 
 /* ---------- 管理端登录 ---------- */
@@ -44,11 +45,12 @@ async function doLogin() {
 function switchTab(tab) {
   state.tab = tab;
   $$('.tab[data-tab]').forEach((t) => t.classList.toggle('active', t.dataset.tab === tab));
-  ['cloud', 'tasks', 'settings'].forEach((p) =>
+  ['cloud', 'tasks', 'files', 'settings'].forEach((p) =>
     $(`#page-${p}`).classList.toggle('hidden', p !== tab));
   clearInterval(state.taskTimer); state.taskTimer = null;
   if (tab === 'cloud') initCloud();
   if (tab === 'tasks') { loadTasks(); state.taskTimer = setInterval(loadTasks, 2000); }
+  if (tab === 'files') loadFs();
   if (tab === 'settings') loadSettings();
 }
 
@@ -214,7 +216,8 @@ async function enqueueSelected() {
     const r = await api('/api/cloud/download', {
       method: 'POST', body: { items, target_dir: target },
     });
-    toast(`已加入 ${r.queued} 个下载任务`);
+    toast(`已加入 ${r.queued} 个下载任务` +
+      (r.skipped ? `，跳过 ${r.skipped} 个（已下载或队列中已有）` : ''));
     state.cloud.selected.clear();
     $('#selCount').textContent = '0';
     renderCloud();
@@ -269,6 +272,120 @@ async function loadTasks() {
       catch (e) { toast(e.message); }
       loadTasks();
     }));
+}
+
+/* ---------- 文件管理 ---------- */
+
+async function loadFs(path) {
+  let data;
+  try {
+    data = await api(`/api/fs/list?with_files=1&path=${encodeURIComponent(path ?? state.fs.path)}`);
+  } catch (e) { toast(e.message); return; }
+  state.fs.path = data.path;
+  state.fs.parent = data.parent;
+  state.fs.selected.clear();
+  updateFsSelUI();
+  $('#fsPath').textContent = data.path;
+  const actionBtns = (p, name, isDir) =>
+    `<span class="tactions">` +
+    `<button class="btn small" data-ren="${esc(p)}" data-name="${esc(name)}">重命名</button>` +
+    `<button class="btn small" data-mov="${esc(p)}">移动</button>` +
+    `<button class="btn small danger" data-del="${esc(p)}" data-isdir="${isDir ? 1 : 0}">删除</button>` +
+    `</span>`;
+  const rowCheck = (p, isDir) =>
+    `<input type="checkbox" data-sel="${esc(p)}" data-isdir="${isDir ? 1 : 0}">`;
+  const rows = [];
+  data.dirs.forEach((d) => rows.push(`<div class="file-row">
+      ${rowCheck(d.path, true)}
+      <span class="icon">📁</span>
+      <span class="fname clickable" data-dir="${esc(d.path)}">${esc(d.name)}</span>
+      <span class="fsize"></span>${actionBtns(d.path, d.name, true)}
+    </div>`));
+  data.files.forEach((f) => rows.push(`<div class="file-row">
+      ${rowCheck(f.path, false)}
+      <span class="icon">${VIDEO_EXT_RE.test(f.name) ? '🎞️' : '📄'}</span>
+      <span class="fname">${esc(f.name)}</span>
+      <span class="fsize">${fmtSize(f.size)}</span>${actionBtns(f.path, f.name, false)}
+    </div>`));
+  $('#fsEmpty').classList.toggle('hidden', rows.length > 0);
+  $('#fsList').innerHTML = rows.join('');
+  $('#fsList').querySelectorAll('[data-dir]').forEach((el) =>
+    el.addEventListener('click', () => loadFs(el.dataset.dir)));
+  $('#fsList').querySelectorAll('[data-sel]').forEach((el) =>
+    el.addEventListener('change', () => {
+      if (el.checked) state.fs.selected.set(el.dataset.sel, el.dataset.isdir === '1');
+      else state.fs.selected.delete(el.dataset.sel);
+      updateFsSelUI();
+    }));
+  $('#fsList').querySelectorAll('[data-ren]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const name = prompt('新名称：', b.dataset.name);
+      if (!name || !name.trim() || name === b.dataset.name) return;
+      try {
+        await api('/api/fs/rename', { method: 'POST', body: { path: b.dataset.ren, name: name.trim() } });
+        toast('已重命名');
+      } catch (e) { toast(e.message); }
+      loadFs();
+    }));
+  $('#fsList').querySelectorAll('[data-mov]').forEach((b) =>
+    b.addEventListener('click', () => openDirPicker(async (dstDir) => {
+      try {
+        await api('/api/fs/move', { method: 'POST', body: { src: b.dataset.mov, dst_dir: dstDir } });
+        toast('已移动');
+      } catch (e) { toast(e.message); }
+      loadFs();
+    })));
+  $('#fsList').querySelectorAll('[data-del]').forEach((b) =>
+    b.addEventListener('click', async () => {
+      const what = b.dataset.isdir === '1' ? '文件夹（含其中全部文件）' : '文件';
+      if (!confirm(`确定删除${what}？此操作不可恢复。\n${b.dataset.del}`)) return;
+      try {
+        await api('/api/fs/delete', { method: 'POST', body: { path: b.dataset.del } });
+        toast('已删除');
+      } catch (e) { toast(e.message); }
+      loadFs();
+    }));
+}
+
+function updateFsSelUI() {
+  const n = state.fs.selected.size;
+  $('#fsSelCount').textContent = n;
+  $('#btnFsMoveSel').classList.toggle('hidden', n === 0);
+  $('#btnFsDelSel').classList.toggle('hidden', n === 0);
+  const boxes = $$('#fsList [data-sel]');
+  $('#fsSelAll').checked = n > 0 && n === boxes.length;
+}
+
+async function fsMoveSelected() {
+  const paths = [...state.fs.selected.keys()];
+  if (!paths.length) return;
+  openDirPicker(async (dstDir) => {
+    let ok = 0;
+    for (const p of paths) {
+      try {
+        await api('/api/fs/move', { method: 'POST', body: { src: p, dst_dir: dstDir } });
+        ok++;
+      } catch (e) { toast(`${p.split('/').pop()}：${e.message}`); }
+    }
+    toast(`已移动 ${ok}/${paths.length} 项`);
+    loadFs();
+  });
+}
+
+async function fsDeleteSelected() {
+  const paths = [...state.fs.selected.keys()];
+  if (!paths.length) return;
+  const hasDir = [...state.fs.selected.values()].some(Boolean);
+  if (!confirm(`确定删除所选 ${paths.length} 项${hasDir ? '（含文件夹及其全部内容）' : ''}？此操作不可恢复。`)) return;
+  let ok = 0;
+  for (const p of paths) {
+    try {
+      await api('/api/fs/delete', { method: 'POST', body: { path: p } });
+      ok++;
+    } catch (e) { toast(`${p.split('/').pop()}：${e.message}`); }
+  }
+  toast(`已删除 ${ok}/${paths.length} 项`);
+  loadFs();
 }
 
 /* ---------- 设置 ---------- */
@@ -329,10 +446,12 @@ async function saveSettings() {
 
 /* ---------- 目录选择器 ---------- */
 
-async function openDirPicker(targetInputId) {
-  state.dirPickTarget = targetInputId;
+async function openDirPicker(target) {
+  // target：输入框 id（设置页用）或回调函数（文件管理「移动」选目标目录用）
+  state.dirPickTarget = target;
   $('#dirMask').classList.remove('hidden');
-  await browseDir($('#' + targetInputId).value || '');
+  const start = typeof target === 'string' ? ($('#' + target).value || '') : state.fs.path;
+  await browseDir(start);
 }
 
 async function browseDir(path) {
@@ -378,6 +497,42 @@ function bindEvents() {
     loadCloudList(state.cloud.cid || '0');
   });
 
+  // 下载任务批量操作
+  const batchAction = async (action) => {
+    try {
+      const r = await api('/api/tasks/batch', { method: 'POST', body: { action } });
+      toast(`已处理 ${r.affected} 个任务`);
+    } catch (e) { toast(e.message); }
+    loadTasks();
+  };
+  $('#btnPauseAll').addEventListener('click', () => batchAction('pause_all'));
+  $('#btnResumeAll').addEventListener('click', () => batchAction('resume_all'));
+  $('#btnClearDone').addEventListener('click', () => {
+    if (confirm('清空全部已完成的下载记录？（不删除已下载的文件）')) batchAction('clear_done');
+  });
+
+  // 文件管理
+  $('#btnFsUp').addEventListener('click', () => { if (state.fs.parent) loadFs(state.fs.parent); });
+  $('#btnFsMkdir').addEventListener('click', async () => {
+    const name = prompt('新建文件夹名称：');
+    if (!name || !name.trim()) return;
+    try {
+      await api('/api/fs/mkdir', { method: 'POST', body: { path: state.fs.path + '/' + name.trim() } });
+      toast('文件夹已创建');
+    } catch (e) { toast(e.message); }
+    loadFs();
+  });
+  $('#fsSelAll').addEventListener('change', (e) => {
+    $$('#fsList [data-sel]').forEach((el) => {
+      el.checked = e.target.checked;
+      if (el.checked) state.fs.selected.set(el.dataset.sel, el.dataset.isdir === '1');
+      else state.fs.selected.delete(el.dataset.sel);
+    });
+    updateFsSelUI();
+  });
+  $('#btnFsMoveSel').addEventListener('click', fsMoveSelected);
+  $('#btnFsDelSel').addEventListener('click', fsDeleteSelected);
+
   // 设置
   $('#btnSaveSettings').addEventListener('click', () => saveSettings().catch((e) => toast(e.message)));
   $('#btnScan').addEventListener('click', async () => {
@@ -416,7 +571,8 @@ function bindEvents() {
   $$('[data-browse]').forEach((b) =>
     b.addEventListener('click', () => openDirPicker(b.dataset.browse)));
   $('#btnPickDir').addEventListener('click', () => {
-    if (state.dirPickTarget) $('#' + state.dirPickTarget).value = state.dirPath;
+    if (typeof state.dirPickTarget === 'function') state.dirPickTarget(state.dirPath);
+    else if (state.dirPickTarget) $('#' + state.dirPickTarget).value = state.dirPath;
     $('#dirMask').classList.add('hidden');
   });
   $('#btnMkdir').addEventListener('click', async () => {

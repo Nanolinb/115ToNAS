@@ -3,6 +3,7 @@ import asyncio
 import json
 import mimetypes
 import re
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -602,7 +603,7 @@ async def cloud_download(request: Request):
 
     async def expand_and_enqueue():
         from .parser import is_video, parse
-        n = 0
+        added = skipped = 0
         for it in items:
             if it.get("is_dir"):
                 # 整文件夹：视频 + 同目录字幕，还原 115 目录结构
@@ -611,7 +612,7 @@ async def cloud_download(request: Request):
                              cloud.iter_media_files(it["id"], _safe_dirname(it["name"]))]
                 except CloudError:
                     continue
-                n += downloader.add_tasks(_pair_subs(batch), target)
+                a, s = downloader.add_tasks(_pair_subs(batch), target)
             elif is_video(it["name"]):
                 # 单选视频：剧集自动按剧名建文件夹；顺带拉同目录同名字幕
                 info = parse(it["name"])
@@ -624,11 +625,15 @@ async def cloud_download(request: Request):
                                   for s in await cloud.list_sibling_subs(pcid)]
                     except CloudError:
                         pass
-                n += downloader.add_tasks(_pair_subs(batch, drop_unmatched=True), target)
-        return n
+                a, s = downloader.add_tasks(_pair_subs(batch, drop_unmatched=True), target)
+            else:
+                continue
+            added += a
+            skipped += s
+        return added, skipped
 
-    n = await expand_and_enqueue()
-    return {"queued": n, "target_dir": target}
+    added, skipped = await expand_and_enqueue()
+    return {"queued": added, "skipped": skipped, "target_dir": target}
 
 
 # ---------------- 下载任务 ----------------
@@ -637,6 +642,21 @@ async def cloud_download(request: Request):
 async def tasks():
     rows = db.q("SELECT * FROM tasks ORDER BY created_at DESC LIMIT 200")
     return {"items": rows}
+
+
+@app.post("/api/tasks/batch")
+async def tasks_batch(request: Request):
+    """批量操作：pause_all 全部暂停 / resume_all 全部启动 / clear_done 清空已下载。"""
+    action = (await request.json()).get("action", "")
+    if action == "pause_all":
+        n = downloader.pause_all()
+    elif action == "resume_all":
+        n = downloader.resume_all()
+    elif action == "clear_done":
+        n = downloader.clear_done()
+    else:
+        raise HTTPException(400, "未知操作")
+    return {"ok": True, "affected": n}
 
 
 @app.post("/api/tasks/{task_id}/{action}")
@@ -707,17 +727,26 @@ def _safe_under_root(path: str) -> Path:
 
 
 @app.get("/api/fs/list")
-async def fs_list(path: str = ""):
+async def fs_list(path: str = "", with_files: bool = False):
     p = _safe_under_root(path) if path else MEDIA_ROOT.resolve()
-    dirs = []
+    dirs, files = [], []
     try:
         for entry in sorted(p.iterdir()):
-            if entry.is_dir() and not entry.name.startswith("."):
+            if entry.name.startswith("."):
+                continue
+            if entry.is_dir():
                 dirs.append({"name": entry.name, "path": str(entry)})
+            elif with_files and entry.is_file():
+                try:
+                    st = entry.stat()
+                except OSError:
+                    continue
+                files.append({"name": entry.name, "path": str(entry),
+                              "size": st.st_size, "mtime": int(st.st_mtime)})
     except OSError as e:
         raise HTTPException(400, str(e))
     parent = str(p.parent) if p != MEDIA_ROOT.resolve() else None
-    return {"path": str(p), "dirs": dirs, "parent": parent,
+    return {"path": str(p), "dirs": dirs, "files": files, "parent": parent,
             "root": str(MEDIA_ROOT.resolve())}
 
 
@@ -730,3 +759,96 @@ async def fs_mkdir(request: Request):
     except OSError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "path": str(p)}
+
+
+# ---------------- 文件管理（管理端） ----------------
+
+def _sync_db_path(src: Path, dst: Path | None, is_dir: bool):
+    """文件被删除/移动后同步媒体库与下载历史，避免观影端出现失效条目。
+    dst=None 表示删除；目录按路径前缀整体平移。is_dir 须在文件系统操作前取好。"""
+    if dst is None:
+        if is_dir:
+            db.exe("DELETE FROM media WHERE path LIKE ?", (str(src) + "/%",))
+            db.exe("DELETE FROM downloads WHERE path LIKE ?", (str(src) + "/%",))
+        else:
+            db.exe("DELETE FROM media WHERE path=?", (str(src),))
+            db.exe("DELETE FROM downloads WHERE path=?", (str(src),))
+        return
+    if is_dir:
+        # SQLite substr 从 1 开始：去掉 "src/" 前缀（长 len(src)+1）后拼 "dst/" 新前缀
+        for table in ("media", "downloads"):
+            db.exe(f"UPDATE {table} SET path = ? || '/' || substr(path, ?) WHERE path LIKE ?",
+                   (str(dst), len(str(src)) + 2, str(src) + "/%"))
+    else:
+        db.exe("UPDATE media SET path=? WHERE path=?", (str(dst), str(src)))
+        db.exe("UPDATE downloads SET path=? WHERE path=?", (str(dst), str(src)))
+
+
+def _check_not_root(p: Path):
+    if p == MEDIA_ROOT.resolve():
+        raise HTTPException(403, "不能对媒体根目录本身操作")
+
+
+@app.post("/api/fs/delete")
+async def fs_delete(request: Request):
+    body = await request.json()
+    p = _safe_under_root(body.get("path", ""))
+    _check_not_root(p)
+    if not p.exists():
+        raise HTTPException(404, "路径不存在")
+    is_dir = p.is_dir()
+    try:
+        if is_dir:
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+    except OSError as e:
+        raise HTTPException(400, str(e))
+    _sync_db_path(p, None, is_dir)
+    return {"ok": True}
+
+
+@app.post("/api/fs/move")
+async def fs_move(request: Request):
+    body = await request.json()
+    src = _safe_under_root(body.get("src", ""))
+    dst_dir = _safe_under_root(body.get("dst_dir", ""))
+    _check_not_root(src)
+    if not src.exists():
+        raise HTTPException(404, "源路径不存在")
+    is_dir = src.is_dir()
+    if not dst_dir.is_dir():
+        raise HTTPException(400, "目标不是目录")
+    if is_dir and (dst_dir == src or src in dst_dir.parents):
+        raise HTTPException(400, "不能移动到自身内部")
+    dst = dst_dir / src.name
+    if dst.exists():
+        raise HTTPException(400, "目标位置已存在同名文件或文件夹")
+    try:
+        shutil.move(str(src), str(dst))
+    except OSError as e:
+        raise HTTPException(400, str(e))
+    _sync_db_path(src, dst, is_dir)
+    return {"ok": True, "path": str(dst)}
+
+
+@app.post("/api/fs/rename")
+async def fs_rename(request: Request):
+    body = await request.json()
+    src = _safe_under_root(body.get("path", ""))
+    _check_not_root(src)
+    name = (body.get("name") or "").strip()
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        raise HTTPException(400, "无效的名称")
+    if not src.exists():
+        raise HTTPException(404, "路径不存在")
+    is_dir = src.is_dir()
+    dst = src.parent / name
+    if dst.exists():
+        raise HTTPException(400, "已存在同名文件或文件夹")
+    try:
+        src.rename(dst)
+    except OSError as e:
+        raise HTTPException(400, str(e))
+    _sync_db_path(src, dst, is_dir)
+    return {"ok": True, "path": str(dst)}

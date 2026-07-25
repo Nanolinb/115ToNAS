@@ -23,14 +23,26 @@ def _speed_limit() -> int:
         return 0
 
 
-def add_tasks(items: list[dict], target_dir: str) -> int:
-    n = 0
+def add_tasks(items: list[dict], target_dir: str) -> tuple[int, int]:
+    """返回 (新增数, 跳过数)。跳过：队列中已有同 pickcode 任务，
+    或下载历史里已下载且文件仍在磁盘上（清空下载记录后也不重复下载）。"""
+    added = skipped = 0
     for it in items:
+        pc = it.get("pickcode") or ""
         # 同名任务（下载中/排队中）跳过
         dup = db.one("SELECT id FROM tasks WHERE pickcode=? AND status IN ('queued','downloading','paused')",
-                     (it.get("pickcode"),))
+                     (pc,))
         if dup:
+            skipped += 1
             continue
+        # 历史已下载且文件仍在 → 跳过；文件已被人为删除 → 清掉失效记录，允许重下
+        if pc:
+            h = db.one("SELECT path FROM downloads WHERE pickcode=?", (pc,))
+            if h:
+                if Path(h["path"]).exists():
+                    skipped += 1
+                    continue
+                db.exe("DELETE FROM downloads WHERE pickcode=?", (pc,))
         # rel：还原 115 目录结构（如 剧集名/Season 1），防目录穿越
         rel = (it.get("rel") or "").strip("/")
         if rel and ".." not in rel.split("/"):
@@ -39,11 +51,11 @@ def add_tasks(items: list[dict], target_dir: str) -> int:
             tdir = target_dir
         db.exe("""INSERT INTO tasks(id,name,pickcode,file_id,target_dir,size,status,created_at,updated_at)
                   VALUES(?,?,?,?,?,?,'queued',?,?)""",
-               (uuid.uuid4().hex[:12], it["name"], it.get("pickcode", ""),
+               (uuid.uuid4().hex[:12], it["name"], pc,
                 str(it.get("id", "")), tdir, it.get("size", 0),
                 db.now(), db.now()))
-        n += 1
-    return n
+        added += 1
+    return added, skipped
 
 
 def control(task_id: str, action: str):
@@ -69,6 +81,33 @@ def control(task_id: str, action: str):
         db.exe("DELETE FROM tasks WHERE id=?", (task_id,))
         return True
     return False
+
+
+def pause_all() -> int:
+    """全部暂停：排队中直接置为 paused；下载中的置标志，由 worker 在分块循环里落停。"""
+    rows = db.q("SELECT id FROM tasks WHERE status IN ('queued','downloading')")
+    for r in rows:
+        _cancel_flags[r["id"]] = "pause"
+    db.exe("UPDATE tasks SET status='paused', updated_at=? WHERE status='queued'",
+           (db.now(),))
+    return len(rows)
+
+
+def resume_all() -> int:
+    """全部启动：已暂停/失败/已取消的任务重新排队（与单个 resume 的状态集一致）。"""
+    rows = db.q("SELECT id FROM tasks WHERE status IN ('paused','failed','canceled')")
+    for r in rows:
+        _cancel_flags.pop(r["id"], None)
+    db.exe("""UPDATE tasks SET status='queued', error='', updated_at=?
+              WHERE status IN ('paused','failed','canceled')""", (db.now(),))
+    return len(rows)
+
+
+def clear_done() -> int:
+    """清空已下载：删除全部已完成任务的记录（不删除已下载到 NAS 的文件）。"""
+    n = db.one("SELECT COUNT(*) AS c FROM tasks WHERE status='done'")["c"]
+    db.exe("DELETE FROM tasks WHERE status='done'")
+    return n
 
 
 async def start_worker():
@@ -158,6 +197,13 @@ async def _download(task: dict):
     part.rename(dest)
     db.exe("UPDATE tasks SET status='done', downloaded=?, size=?, speed=0, updated_at=? WHERE id=?",
            (downloaded, total, db.now(), tid))
+
+    # 写入下载历史（防重复下载的持久依据，清空任务记录后仍有效）
+    if task["pickcode"]:
+        db.exe("""INSERT INTO downloads(pickcode,name,path,size,done_at) VALUES(?,?,?,?,?)
+                  ON CONFLICT(pickcode) DO UPDATE SET name=excluded.name,
+                  path=excluded.path, size=excluded.size, done_at=excluded.done_at""",
+               (task["pickcode"], task["name"], str(dest), total, db.now()))
 
     # 下载完成 → 若落在媒体库目录内，立即扫描该文件
     if db.get_setting("auto_scan", "1") == "1":

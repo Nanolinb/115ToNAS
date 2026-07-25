@@ -13,6 +13,7 @@
   <nav class="tabs">
     <button class="tab active" data-tab="cloud">115 网盘</button>
     <button class="tab" data-tab="tasks">下载任务 <span id="taskBadge"></span></button>
+    <button class="tab" data-tab="files">文件管理</button>
     <button class="tab" data-tab="settings">设置</button>
   </nav>
   <span style="flex:1"></span>
@@ -56,9 +57,30 @@
   <section id="page-tasks" class="hidden">
     <div class="toolbar">
       <span style="color:var(--muted);font-size:13px">串行下载，保护 NAS 资源；支持断点续传</span>
+      <span style="flex:1"></span>
+      <button class="btn" id="btnPauseAll">全部暂停</button>
+      <button class="btn" id="btnResumeAll">全部启动</button>
+      <button class="btn danger" id="btnClearDone">清空已下载</button>
     </div>
     <div id="taskList"></div>
     <div class="empty hidden" id="taskEmpty">暂无下载任务</div>
+  </section>
+
+  <!-- 文件管理 -->
+  <section id="page-files" class="hidden">
+    <div class="toolbar">
+      <button class="btn" id="btnFsUp">⬅ 上级目录</button>
+      <button class="btn" id="btnFsMkdir">新建文件夹</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)">
+        <input type="checkbox" id="fsSelAll"> 全选
+      </label>
+      <button class="btn hidden" id="btnFsMoveSel">移动所选</button>
+      <button class="btn danger hidden" id="btnFsDelSel">删除所选 (<span id="fsSelCount">0</span>)</button>
+      <span style="flex:1"></span>
+      <span id="fsPath" style="color:var(--muted);font-size:13px"></span>
+    </div>
+    <div class="file-list" id="fsList"></div>
+    <div class="empty hidden" id="fsEmpty">空文件夹</div>
   </section>
 
   <!-- 设置 -->

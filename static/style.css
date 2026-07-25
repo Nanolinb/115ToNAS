@@ -170,6 +170,7 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .file-row .fname.clickable:hover { color: var(--accent2); }
 .file-row .fsize { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .file-row.dim { opacity: .45; }
+.file-row .tactions { display: flex; gap: 6px; flex-shrink: 0; }
 
 /* ---------- 任务 ---------- */
 .task-card {
