@@ -11,79 +11,142 @@ from .parser import SUB_EXTS
 
 ASSRT = "https://api.assrt.net/v1"
 
+# 字幕轨道语言元数据
+LANG_META = {
+    "zh": "中文字幕", "en": "English", "cht": "繁体中文", "zh-en": "中英双语",
+}
+# 在线搜刮的目标语言与文件后缀
+TRACK_TARGETS = (("zh", ".zh"), ("en", ".en"), ("zh-en", ".zh-en"))
+
+
+def _detect_lang(infix: str) -> str:
+    """从字幕文件名中缀识别语言（如 .zh / .en / .cht / .zh-en / .chs / .双语）。"""
+    n = infix.lower()
+    for key, pats in (("zh-en", (".zh-en", ".zh_en", ".chs-eng", ".zho-eng", ".双语", ".简英")),
+                      ("cht", (".cht", ".tc", ".zht", ".繁")),
+                      ("zh", (".zh", ".chs", ".sc", ".zhs", ".cn", ".简")),
+                      ("en", (".en", ".eng", ".英"))):
+        if any(p in n for p in pats):
+            return key
+    return "zh"
+
 
 def find_local_sub(video_path: Path) -> Path | None:
     """查找视频旁边的同名字幕（含 .zh/.chs/.cht/.sc 等中缀）。"""
+    tracks = find_all_local_subs(video_path)
+    return Path(tracks[0]["path"]) if tracks else None
+
+
+def find_all_local_subs(video_path: Path) -> list:
+    """扫描视频旁全部同名字幕，识别为轨道列表 [{lang,label,path}]。每种语言取第一个。"""
     stem = video_path.stem.lower()
+    out = []
     try:
-        for f in video_path.parent.iterdir():
+        for f in sorted(video_path.parent.iterdir()):
             if f.suffix.lower() in SUB_EXTS and f.stem.lower().startswith(stem):
-                return f
+                infix = f.stem.lower()[len(stem):]
+                lang = _detect_lang(infix)
+                out.append({"lang": lang, "label": LANG_META[lang], "path": str(f)})
     except OSError:
         pass
-    return None
+    # 同一语言可能同时有 .ass 和 .srt：浏览器 <track> 只认 srt/vtt，优先可播格式
+    fmt_rank = {".vtt": 0, ".srt": 1}
+    seen, uniq = set(), []
+    for t in sorted(out, key=lambda t: (t["lang"], fmt_rank.get(Path(t["path"]).suffix.lower(), 2))):
+        if t["lang"] not in seen:
+            seen.add(t["lang"])
+            uniq.append(t)
+    return uniq
 
 
-def _pick_sub(subs: list) -> dict | None:
-    def score(s):
-        lang = (s.get("lang") or {}).get("langlist") or {}
-        sc = 0
-        if lang.get("langchs"):
-            sc += 3
-        if lang.get("langdou"):
-            sc += 2
-        if lang.get("langcht"):
-            sc += 1
-        return sc
-    # 注意：搜索结果不带 filelist（要调 detail 接口才有），只要求有 id
-    subs = [s for s in subs if s.get("id")]
-    if not subs:
-        return None
-    return max(subs, key=score)
+def _langflags(s: dict) -> dict:
+    return (s.get("lang") or {}).get("langlist") or {}
 
 
-async def search_and_download(video_path: Path, title: str, year: int | None) -> Path | None:
+def _pick_for(subs: list, target: str) -> dict | None:
+    """按目标语言挑选候选：zh=纯简中，en=纯英文，zh-en=双语合并。"""
+    def ok(s):
+        L = _langflags(s)
+        chs = bool(L.get("langchs"))
+        cht = bool(L.get("langcht"))
+        eng = bool(L.get("langeng"))
+        dou = bool(L.get("langdou"))
+        if target == "zh":
+            return chs and not eng and not dou
+        if target == "en":
+            return eng and not chs and not cht and not dou
+        if target == "zh-en":
+            return dou or (chs and eng)
+        return False
+    cands = [s for s in subs if s.get("id") and ok(s)]
+    if not cands and target == "zh":
+        # 宽松回退：任何含简中的（含双语条目的简中部分）
+        cands = [s for s in subs if s.get("id") and _langflags(s).get("langchs")]
+    return cands[0] if cands else None
+
+
+async def search_and_download(video_path: Path, title: str, year: int | None) -> list:
+    """在线搜刮多语言字幕（简中 / 英文 / 中英双语），返回新保存的轨道列表。"""
     token = db.get_secret("assrt_token", "").strip()
     if not token or not title:
-        return None
-    query = f"{title} {year}" if year else title
+        return []
+    saved = []
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            subs = await _search(client, token, query)
-            if not subs and year:  # 去掉年份再搜
-                subs = await _search(client, token, title)
-            if not subs and title:
-                # 英文名找不到时，去掉标点再试一次（如 The.First.Slam.Dunk）
-                alt = title.replace(".", " ").replace("_", " ").strip()
-                if alt != title:
-                    subs = await _search(client, token, alt)
-            chosen = _pick_sub(subs)
-            if not chosen:
-                print(f"[subtitles] assrt 无匹配结果: {query}")
-                return None
-            detail_subs = await _detail(client, token, chosen["id"])
-            s0 = detail_subs[0] if detail_subs else chosen
-            files = s0.get("filelist") or []
-            # 多文件字幕包走 filelist，单文件字幕直接在条目上带 url
-            url = (files[0].get("url") if files else None) or s0.get("url")
-            if not url:
-                print(f"[subtitles] assrt detail 无下载地址: id={chosen['id']}")
-                return None
-            raw = await _fetch(client, url)
-            if raw is None or len(raw) < 20:
-                print(f"[subtitles] 字幕文件下载失败: {url[:80]}")
-                return None
-            # 判定格式：ass 字幕有 [Script Info]，其余按 srt 处理
-            head = raw[:200].decode("utf-8", errors="ignore")
-            ext = ".ass" if "[Script Info]" in head else ".srt"
-            dest = video_path.with_suffix("").with_name(
-                video_path.stem + ".zh" + ext)
-            dest.write_bytes(_to_utf8(raw))
-            print(f"[subtitles] 字幕已保存: {dest.name}")
-            return dest
+            subs = await _search_candidates(client, token, title, year)
+            if not subs:
+                print(f"[subtitles] assrt 无匹配结果: {title} {year or ''}")
+                return []
+            for target, suffix in TRACK_TARGETS:
+                chosen = _pick_for(subs, target)
+                if not chosen:
+                    continue
+                track = await _download_one(client, token, chosen,
+                                            video_path, suffix, target)
+                if track:
+                    saved.append(track)
     except Exception as e:
         print(f"[subtitles] 搜刮失败 {title}: {type(e).__name__} {e}")
+    return saved
+
+
+async def _search_candidates(client: httpx.AsyncClient, token: str,
+                             title: str, year: int | None) -> list:
+    query = f"{title} {year}" if year else title
+    subs = await _search(client, token, query)
+    if not subs and year:  # 去掉年份再搜
+        subs = await _search(client, token, title)
+    if not subs and title:
+        # 英文名找不到时，去掉标点再试一次（如 The.First.Slam.Dunk）
+        alt = title.replace(".", " ").replace("_", " ").strip()
+        if alt != title:
+            subs = await _search(client, token, alt)
+    return subs
+
+
+async def _download_one(client: httpx.AsyncClient, token: str, chosen: dict,
+                        video_path: Path, suffix: str, lang: str) -> dict | None:
+    detail_subs = await _detail(client, token, chosen["id"])
+    s0 = detail_subs[0] if detail_subs else chosen
+    files = s0.get("filelist") or []
+    # 多文件字幕包走 filelist，单文件字幕直接在条目上带 url
+    url = (files[0].get("url") if files else None) or s0.get("url")
+    if not url:
+        print(f"[subtitles] assrt detail 无下载地址: id={chosen['id']}")
         return None
+    raw = await _fetch(client, url)
+    if raw is None or len(raw) < 20:
+        print(f"[subtitles] 字幕文件下载失败: {url[:80]}")
+        return None
+    # 判定格式：ass 字幕有 [Script Info]，其余按 srt 处理
+    head = raw[:200].decode("utf-8", errors="ignore")
+    ext = ".ass" if "[Script Info]" in head else ".srt"
+    dest = video_path.with_suffix("").with_name(video_path.stem + suffix + ext)
+    if dest.exists():
+        return {"lang": lang, "label": LANG_META[lang], "path": str(dest)}
+    dest.write_bytes(_to_utf8(raw))
+    print(f"[subtitles] 字幕已保存: {dest.name}")
+    return {"lang": lang, "label": LANG_META[lang], "path": str(dest)}
 
 
 async def _get_json(client: httpx.AsyncClient, url: str, params: dict,

@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS media (
     rating     REAL,
     has_sub    INTEGER DEFAULT 0,
     sub_path   TEXT,
+    subs       TEXT DEFAULT '',            -- JSON 数组：[{lang,label,path}] 多语言字幕轨道
     sub_status TEXT DEFAULT '',          -- '' | searching | ok | failed
     status     TEXT DEFAULT 'ok',        -- ok | missing
     created_at INTEGER
@@ -70,6 +71,17 @@ def init():
         cols = [r["name"] for r in _conn.execute("PRAGMA table_info(sessions)")]
         if cols and "role" not in cols:
             _conn.execute("ALTER TABLE sessions ADD COLUMN role TEXT DEFAULT 'admin'")
+        # 老库迁移：media 表补 subs 列（多语言字幕轨道，JSON 数组）
+        cols = [r["name"] for r in _conn.execute("PRAGMA table_info(media)")]
+        if cols and "subs" not in cols:
+            _conn.execute("ALTER TABLE media ADD COLUMN subs TEXT DEFAULT ''")
+            # 已有的单字幕记录迁移为轨道数组
+            for row in _conn.execute(
+                    "SELECT id, sub_path FROM media WHERE sub_path IS NOT NULL AND sub_path != ''").fetchall():
+                import json as _json
+                _conn.execute("UPDATE media SET subs=? WHERE id=?", (
+                    _json.dumps([{"lang": "zh", "label": "中文字幕",
+                                  "path": row["sub_path"]}]), row["id"]))
         _conn.commit()
 
 
