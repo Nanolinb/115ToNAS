@@ -60,14 +60,19 @@ async function playMedia(id) {
   const video = $('#playerVideo');
   video.innerHTML = '';
   video.src = `/api/stream/${id}`;
-  if (d.has_sub) {
+  // 多语言字幕轨道：中文 / English / 中英双语，浏览器原生 CC 菜单切换
+  (d.subs || []).forEach((t, i) => {
     const track = document.createElement('track');
-    track.kind = 'subtitles'; track.label = '中文字幕'; track.srclang = 'zh';
-    track.src = `/api/subtitle/${id}`; track.default = true;
+    track.kind = 'subtitles';
+    track.label = t.label || t.lang || `字幕 ${i + 1}`;
+    track.srclang = t.lang === 'en' ? 'en' : 'zh';
+    track.src = `/api/subtitle/${id}/${i}`;
+    if (i === 0) track.default = true;
     video.appendChild(track);
-  }
+  });
   $('#playerName').textContent = d.filename;
   $('#playerMask').classList.remove('hidden');
+  setupAudioMenu(id, video);
   // 安卓 TV App 内（原生桥存在时）：提供「外部播放器」通道，
   // 由电视/投影仪自己的播放器硬解，支持内嵌多音轨/字幕切换
   const extBtn = $('#btnExternal');
@@ -92,4 +97,34 @@ function closePlayer() {
   const v = $('#playerVideo');
   v.pause(); v.removeAttribute('src'); v.load();
   $('#playerMask').classList.add('hidden');
+}
+
+/* ---------- 音轨菜单 ---------- */
+
+async function setupAudioMenu(id, video) {
+  const sel = $('#audioTrackSel');
+  sel.classList.remove('hidden');
+  sel.disabled = true;
+  sel.innerHTML = '<option>检测音轨…</option>';
+  let info = { available: false, audio: 0 };
+  try { info = await api(`/api/media/${id}/tracks`); } catch (e) {}
+  const n = info.audio || 0;
+  // 浏览器里只有 Safari 实现了 audioTracks；Chrome/WebView 不支持网页内切音轨
+  const canSwitch = !!video.audioTracks && n > 1;
+  if (canSwitch) {
+    const at = video.audioTracks;
+    sel.disabled = false;
+    sel.innerHTML = Array.from({ length: n }, (_, i) =>
+      `<option value="${i}">音轨 ${i + 1}${at[i] && at[i].label ? ' · ' + esc(at[i].label) : ''}</option>`
+    ).join('');
+    sel.onchange = () => {
+      for (let i = 0; i < at.length; i++) at[i].enabled = (i === +sel.value);
+    };
+    sel.title = '切换内嵌音轨';
+  } else {
+    sel.innerHTML = `<option>${n > 1 ? n + ' 条音轨' : '单音轨'}</option>`;
+    sel.title = n > 1
+      ? '当前浏览器不支持网页内切换音轨（仅 Safari 支持）；请用「电视播放器」或复制直链到 IINA / Infuse / VLC 切换'
+      : '该视频只有一条音轨';
+  }
 }
