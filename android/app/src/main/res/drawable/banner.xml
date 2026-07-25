@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <!-- TV 桌面 banner：深色底 + 左侧圆环播放标志 -->
+    <path
+        android:fillColor="#141A26"
+        android:pathData="M0,0h320v180h-320z" />
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#58A6FF"
+        android:strokeWidth="5"
+        android:pathData="M32,90 a40,40 0 1,0 80,0 a40,40 0 1,0 -80,0" />
+    <path
+        android:fillColor="#EBF0F8"
+        android:pathData="M60,68 L96,90 L60,112 Z" />
+    <path
+        android:fillColor="#58A6FF"
+        android:pathData="M132,84 h140 v6 h-140 z" />
+    <path
+        android:fillColor="#3A4557"
+        android:pathData="M132,102 h100 v5 h-100 z" />
+</vector>

@@ -1,0 +1,4 @@
+// 根构建脚本：插件在 app 模块内声明版本，无第三方依赖
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}
