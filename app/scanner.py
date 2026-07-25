@@ -121,7 +121,7 @@ async def scan_file(path: Path, lib_type: str, force: bool = False):
                           list(values.values()))
 
     # 没有本地字幕且配置了 token → 在线搜刮
-    if not sub and db.get_setting("assrt_token", "").strip():
+    if not sub and db.get_secret("assrt_token", "").strip():
         db.exe("UPDATE media SET sub_status='searching' WHERE id=?", (media_id,))
         found = await subtitles.search_and_download(
             path, (meta or {}).get("original_title") or info["title"],
