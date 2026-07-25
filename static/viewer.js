@@ -61,7 +61,8 @@ function renderLibrary() {
     const subBadge = e.kind === 'movie' && e.has_sub
       ? '<span class="badge sub">字幕</span>' : '';
     const countBadge = e.kind === 'show' ? `<span class="badge">${e.count}集</span>` : '';
-    return `<div class="card" data-key="${esc(e.key)}">
+    return `<div class="card" data-key="${esc(e.key)}" tabindex="0" role="button"
+      aria-label="${esc(e.name_cn || e.title)}">
       <div class="poster-wrap">
         <img loading="lazy" src="${posterUrl(e.poster)}" alt="">
         ${countBadge}${subBadge}
@@ -70,8 +71,13 @@ function renderLibrary() {
       <div class="sub-title">${e.year || ''} ${e.rating ? '· ★' + e.rating : ''}</div>
     </div>`;
   }).join('');
-  grid.querySelectorAll('.card').forEach((c) =>
-    c.addEventListener('click', () => openDetail(c.dataset.key)));
+  grid.querySelectorAll('.card').forEach((c) => {
+    c.addEventListener('click', () => openDetail(c.dataset.key));
+    // 遥控器确认键（Enter / 空格）打开详情
+    c.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openDetail(c.dataset.key); }
+    });
+  });
 }
 
 async function openDetail(key) {

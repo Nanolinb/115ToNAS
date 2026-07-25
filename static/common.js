@@ -68,6 +68,17 @@ async function playMedia(id) {
   }
   $('#playerName').textContent = d.filename;
   $('#playerMask').classList.remove('hidden');
+  // 安卓 TV App 内（原生桥存在时）：提供「外部播放器」通道，
+  // 由电视/投影仪自己的播放器硬解，支持内嵌多音轨/字幕切换
+  const extBtn = $('#btnExternal');
+  if (window.MediaHubNative && typeof MediaHubNative.play === 'function') {
+    extBtn.classList.remove('hidden');
+    extBtn.onclick = () => {
+      MediaHubNative.play(`${location.origin}/api/stream/${id}`, d.filename);
+    };
+  } else {
+    extBtn.classList.add('hidden');
+  }
   $('#btnCopyLink').onclick = async () => {
     const url = `${location.origin}/api/stream/${id}`;
     try { await navigator.clipboard.writeText(url); toast('直链已复制（可粘贴到极米/Infuse 等播放器）'); }
