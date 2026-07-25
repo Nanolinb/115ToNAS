@@ -15,6 +15,17 @@ def api_key() -> str | None:
     return key or None
 
 
+def _client(**kw) -> httpx.AsyncClient:
+    """TMDB 专用 HTTP 客户端：设置页配了代理（proxy_url）时走代理。"""
+    proxy = (db.get_setting("proxy_url", "") or "").strip()
+    if proxy:
+        try:
+            return httpx.AsyncClient(proxy=proxy, **kw)
+        except TypeError:  # httpx < 0.26 用 proxies=
+            return httpx.AsyncClient(proxies=proxy, **kw)
+    return httpx.AsyncClient(**kw)
+
+
 async def _get(client: httpx.AsyncClient, path: str, **params):
     params["api_key"] = api_key()
     params.setdefault("language", "zh-CN")
@@ -28,7 +39,7 @@ async def match(title: str, year: int | None, kind: str) -> dict | None:
     if not api_key() or not title:
         return None
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with _client(timeout=15) as client:
             params = {"query": title}
             if year:
                 params["year" if kind == "movie" else "first_air_date_year"] = year
@@ -64,7 +75,7 @@ async def match_by_id(tmdb_id: int, kind: str) -> dict | None:
     if not api_key():
         return None
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with _client(timeout=15) as client:
             detail = await _get(client, f"/{kind}/{tmdb_id}")
             poster = await _cache_image(client, detail.get("poster_path"), "w500")
             backdrop = await _cache_image(client, detail.get("backdrop_path"), "w780")
@@ -90,7 +101,7 @@ async def search_candidates(title: str, kind: str) -> list:
     if not api_key() or not title:
         return []
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with _client(timeout=15) as client:
             data = await _get(client, f"/search/{kind}", query=title)
             out = []
             for r in (data.get("results") or [])[:8]:

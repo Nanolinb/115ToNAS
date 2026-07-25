@@ -1,5 +1,6 @@
 """媒体库扫描：遍历电影/剧集目录 → 解析文件名 → TMDB 匹配 → 本地/在线字幕。"""
 import asyncio
+import json
 import time
 from pathlib import Path
 
@@ -88,7 +89,7 @@ async def scan_file(path: Path, lib_type: str, force: bool = False):
             meta = await tmdb_client.match(
                 info["title"], info["year"], "tv" if is_episode else "movie")
 
-    sub = subtitles.find_local_sub(path)
+    tracks = subtitles.find_all_local_subs(path)
     values = {
         "type": media_type,
         "path": str(path),
@@ -105,8 +106,9 @@ async def scan_file(path: Path, lib_type: str, force: bool = False):
         "overview": (meta or {}).get("overview"),
         "genres": (meta or {}).get("genres"),
         "rating": (meta or {}).get("rating"),
-        "has_sub": 1 if sub else 0,
-        "sub_path": str(sub) if sub else None,
+        "has_sub": 1 if tracks else 0,
+        "sub_path": tracks[0]["path"] if tracks else None,
+        "subs": json.dumps(tracks, ensure_ascii=False),
         "status": "ok",
         "created_at": int(time.time()),
     }
@@ -120,18 +122,26 @@ async def scan_file(path: Path, lib_type: str, force: bool = False):
         media_id = db.exe(f"INSERT INTO media({cols}) VALUES({','.join('?' * len(values))})",
                           list(values.values()))
 
-    # 没有本地字幕且配置了 token → 在线搜刮
-    if not sub and db.get_secret("assrt_token", "").strip():
-        db.exe("UPDATE media SET sub_status='searching' WHERE id=?", (media_id,))
-        found = await subtitles.search_and_download(
-            path, (meta or {}).get("original_title") or info["title"],
-            values["year"])
-        if not found:
-            found = await subtitles.search_and_download(
-                path, info["title"], values["year"])
-        db.exe("UPDATE media SET sub_status=?, has_sub=?, sub_path=? WHERE id=?",
-               ("ok" if found else "failed", 1 if found else 0,
-                str(found) if found else None, media_id))
+    # 缺字幕语言（简中/英文/双语）且配置了 token → 在线补刮
+    if db.get_secret("assrt_token", "").strip():
+        have = {t["lang"] for t in tracks}
+        if not {"zh", "en", "zh-en"} <= have:
+            db.exe("UPDATE media SET sub_status='searching' WHERE id=?", (media_id,))
+            title_q = (meta or {}).get("original_title") or info["title"]
+            new_tracks = await subtitles.search_and_download(
+                path, title_q, values["year"])
+            if not new_tracks and title_q != info["title"]:
+                new_tracks = await subtitles.search_and_download(
+                    path, info["title"], values["year"])
+            for t in new_tracks:
+                if t["lang"] not in have:
+                    tracks.append(t)
+                    have.add(t["lang"])
+            db.exe("""UPDATE media SET sub_status=?, has_sub=?, sub_path=?, subs=?
+                      WHERE id=?""",
+                   ("ok" if tracks else "failed", 1 if tracks else 0,
+                    tracks[0]["path"] if tracks else None,
+                    json.dumps(tracks, ensure_ascii=False), media_id))
 
 
 async def rematch(media_id: int, tmdb_id: int | None = None,
