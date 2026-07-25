@@ -84,6 +84,18 @@ async function playMedia(id) {
   } else {
     extBtn.classList.add('hidden');
   }
+  // Mac Safari 不支持 MKV/AVI 等容器 → 显示「用 IINA 打开」（iina:// URL scheme）
+  const iinaBtn = $('#btnIina');
+  const isMacSafari = /Macintosh/.test(navigator.userAgent) &&
+    /Safari/.test(navigator.userAgent) && !/Chrome|Edg/.test(navigator.userAgent);
+  const nativeOk = /\.(mp4|m4v|mov|webm)(\?|$)/i.test(d.filename || '');
+  if (isMacSafari && !nativeOk) {
+    iinaBtn.classList.remove('hidden');
+    iinaBtn.href = 'iina://open?url=' +
+      encodeURIComponent(`${location.origin}/api/stream/${id}`);
+  } else {
+    iinaBtn.classList.add('hidden');
+  }
   $('#btnCopyLink').onclick = async () => {
     const url = `${location.origin}/api/stream/${id}`;
     try { await navigator.clipboard.writeText(url); toast('直链已复制（可粘贴到极米/Infuse 等播放器）'); }
