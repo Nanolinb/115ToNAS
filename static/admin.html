@@ -80,7 +80,12 @@
         <div class="hint">到 <a href="https://www.themoviedb.org/settings/api" target="_blank">themoviedb.org → 设置 → API</a> 免费申请（选 Developer，2 分钟）。已保存的 Key 加密存储，页面只显示后 4 位。</div>
       </div>
       <div class="field">
-        <label>射手网(伪)字幕 Token（用于自动下载中文字幕）</label>
+        <label>网络代理（仅 TMDB 封面刮削使用；115 与字幕直连，不走代理）</label>
+        <div class="row"><input type="text" id="setProxy" placeholder="例：http://192.168.1.100:7890；留空 = 直连"></div>
+        <div class="hint">填你 Mac / 路由器上代理软件的「允许局域网连接」地址与端口。TMDB 在国内不可直连，需要代理才能刮削封面与影片信息。</div>
+      </div>
+      <div class="field">
+        <label>射手网(伪)字幕 Token（用于自动搜刮中文/英文/双语字幕）</label>
         <div class="row"><input type="text" id="setAssrt" placeholder="留空则只使用视频旁已有的字幕"></div>
         <div class="hint">到 <a href="https://assrt.net/usercp" target="_blank">assrt.net</a> 注册后在「个人中心 → API Token」获取。已保存的 Token 加密存储，页面只显示后 4 位。</div>
       </div>
