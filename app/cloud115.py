@@ -167,6 +167,30 @@ class Cloud115:
         "size_desc": ("file_size", 0), "size_asc": ("file_size", 1),
     }
 
+    @staticmethod
+    def _name_key(name: str):
+        """名称排序键：中文按拼音序（GBK 编码天然按拼音排列），ASCII 不区分大小写。"""
+        n = name.lower()
+        try:
+            return n.encode("gbk")
+        except UnicodeEncodeError:
+            return n.encode("utf-8")
+
+    def _sort_items(self, items: list, sort: str) -> list:
+        """本地排序兜底：目录恒在文件前，组内按选定规则排，不依赖服务端排序参数。"""
+        if sort in ("name_asc", "name_desc"):
+            key = lambda x: self._name_key(x["name"])
+        elif sort in ("size_desc", "size_asc"):
+            key = lambda x: x["size"]
+        else:  # time_desc / time_asc；mtime 可能是时间戳或 "YYYY-MM-DD HH:MM"
+            def key(x):
+                t = str(x.get("mtime") or "")
+                return t.zfill(20) if t.isdigit() else t
+        reverse = sort.endswith("_desc")
+        dirs = sorted((i for i in items if i["is_dir"]), key=key, reverse=reverse)
+        files = sorted((i for i in items if not i["is_dir"]), key=key, reverse=reverse)
+        return dirs + files
+
     async def _fs_call(self, fn, retries: int = 3):
         """p115client 同步调用：转线程 + 网络瞬断重试。"""
         last: Exception | None = None
@@ -197,8 +221,7 @@ class Cloud115:
 
         resp = await self._fs_call(_call)
         items = [self._normalize(it) for it in resp.get("data", [])]
-        # 目录永远排在文件前，组内保持服务端排序结果
-        items.sort(key=lambda x: not x["is_dir"])
+        items = self._sort_items(items, sort)
         crumbs = [{"cid": str(p.get("cid", "0")), "name": p.get("name", "")}
                   for p in (resp.get("path") or [])]
         return {"items": items, "count": int(resp.get("count") or len(items)),
@@ -222,8 +245,11 @@ class Cloud115:
         client = self._require_client()
 
         def _call():
+            # 直链签名与取链时的 User-Agent 绑定（URL 参数 f=1），
+            # 必须用 user_agent 形参传入，保证下载时用同一个 UA，
+            # 否则 CDN 返回 403 invalid signature
             return str(client.download_url(pickcode, app="android",
-                                           headers={"User-Agent": UA}))
+                                           user_agent=UA))
 
         try:
             return await asyncio.to_thread(_call)

@@ -66,12 +66,13 @@
     <div class="settings-grid">
       <div class="field">
         <label>媒体目录（点击「浏览」可在 NAS 上选择或新建文件夹）</label>
+        <div class="hint" style="margin-bottom:10px">标签在输入框上方，请对应填写：</div>
+        <div class="hint"><b>① 电影目录</b></div>
         <div class="row"><input type="text" id="setMovieDir"><button class="btn" data-browse="setMovieDir">浏览</button></div>
-        <div class="hint">电影目录</div>
-        <div class="row" style="margin-top:8px"><input type="text" id="setTvDir"><button class="btn" data-browse="setTvDir">浏览</button></div>
-        <div class="hint">剧集目录</div>
-        <div class="row" style="margin-top:8px"><input type="text" id="setDownloadDir"><button class="btn" data-browse="setDownloadDir">浏览</button></div>
-        <div class="hint">默认下载目录（网盘页面也可临时切换）</div>
+        <div class="hint" style="margin-top:10px"><b>② 剧集目录</b></div>
+        <div class="row"><input type="text" id="setTvDir"><button class="btn" data-browse="setTvDir">浏览</button></div>
+        <div class="hint" style="margin-top:10px"><b>③ 默认下载目录</b>（网盘页面也可临时切换）</div>
+        <div class="row"><input type="text" id="setDownloadDir"><button class="btn" data-browse="setDownloadDir">浏览</button></div>
       </div>
       <div class="field">
         <label>TMDB API Key（用于封面与影片信息）</label>
