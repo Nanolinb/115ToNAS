@@ -277,6 +277,7 @@ async function loadSettings() {
   $('#setTvDir').value = state.settings.tv_dir;
   $('#setDownloadDir').value = state.settings.download_dir;
   $('#setTmdb').value = state.settings.tmdb_key;
+  $('#setProxy').value = state.settings.proxy_url || '';
   $('#setAssrt').value = state.settings.assrt_token;
   $('#setSpeed').value = state.settings.speed_limit;
   $('#setAutoScan').value = state.settings.auto_scan;
@@ -288,6 +289,7 @@ async function saveSettings() {
     body: {
       movie_dir: $('#setMovieDir').value, tv_dir: $('#setTvDir').value,
       download_dir: $('#setDownloadDir').value, tmdb_key: $('#setTmdb').value,
+      proxy_url: $('#setProxy').value,
       assrt_token: $('#setAssrt').value, speed_limit: $('#setSpeed').value,
       auto_scan: $('#setAutoScan').value,
     },
