@@ -11,7 +11,7 @@ IMG = "https://image.tmdb.org/t/p"
 
 
 def api_key() -> str | None:
-    key = db.get_setting("tmdb_key", "").strip()
+    key = db.get_secret("tmdb_key", "").strip()
     return key or None
 
 

@@ -8,6 +8,7 @@ import time
 
 import httpx
 
+from . import db
 from .config import COOKIES_PATH, UA
 
 QR_API = "https://qrcodeapi.115.com"
@@ -15,6 +16,21 @@ QR_API = "https://qrcodeapi.115.com"
 
 class CloudError(Exception):
     pass
+
+
+async def _req_json(method: str, url: str, retries: int = 3, **kw) -> dict:
+    """115 API 请求：针对网络抖动做有限重试。"""
+    last: Exception | None = None
+    for attempt in range(retries):
+        try:
+            async with httpx.AsyncClient(timeout=15) as h:
+                r = await h.request(method, url, **kw)
+                return r.json()
+        except Exception as e:  # 连接超时/重置等瞬断，重试
+            last = e
+            if attempt < retries - 1:
+                await asyncio.sleep(1.2 * (attempt + 1))
+    raise CloudError(f"网络请求失败（已重试 {retries} 次）: {type(last).__name__}")
 
 
 class Cloud115:
@@ -27,11 +43,19 @@ class Cloud115:
 
     def _load_client(self):
         self._client = None
-        if COOKIES_PATH.exists() and COOKIES_PATH.read_text().strip():
+        cookie = db.get_secret("115_cookie", "")
+        if not cookie and COOKIES_PATH.exists():
+            # 旧版本明文 cookie 文件：迁移进加密库后删除
+            legacy = COOKIES_PATH.read_text().strip()
+            if legacy:
+                db.set_secret("115_cookie", legacy)
+                cookie = legacy
+            COOKIES_PATH.unlink(missing_ok=True)
+        if cookie:
             try:
                 from p115client import P115Client
                 # console_qrcode=False 防止在容器里尝试弹二维码
-                self._client = P115Client(COOKIES_PATH, console_qrcode=False)
+                self._client = P115Client(cookie, console_qrcode=False)
             except Exception:
                 self._client = None
 
@@ -45,10 +69,8 @@ class Cloud115:
             return False
 
     async def new_qrcode(self) -> dict:
-        """发起一次扫码登录，返回 {uid}，PNG 由 qr_png() 提供。"""
-        async with httpx.AsyncClient(timeout=15) as h:
-            r = await h.get(f"{QR_API}/api/1.0/web/1.0/token/")
-            data = r.json().get("data") or {}
+        """发起一次扫码登录，返回 {uid, qr_png(base64 不需要，直接 bytes 由路由返回)}。"""
+        data = (await _req_json("GET", f"{QR_API}/api/1.0/web/1.0/token/", retries=5)).get("data") or {}
         uid, ts, sign = data.get("uid"), data.get("time"), data.get("sign")
         content = data.get("qrcode")
         if not (uid and content):
@@ -71,10 +93,13 @@ class Cloud115:
         pend = self._pending_qr.get(uid)
         if not pend:
             return {"status": "expired"}
-        async with httpx.AsyncClient(timeout=15) as h:
-            r = await h.get(f"{QR_API}/get/status/",
-                            params={"uid": uid, "time": pend["time"], "sign": pend["sign"]})
-            status = (r.json().get("data") or {}).get("status")
+        try:
+            payload = await _req_json(
+                "GET", f"{QR_API}/get/status/", retries=2,
+                params={"uid": uid, "time": pend["time"], "sign": pend["sign"]})
+        except CloudError:
+            return {"status": "waiting"}  # 轮询遇网络抖动：保持等待，下轮再试
+        status = (payload.get("data") or {}).get("status")
         if status == 0:
             return {"status": "waiting"}
         if status == 1:
@@ -85,19 +110,19 @@ class Cloud115:
         return {"status": "expired"}
 
     async def _complete_login(self, uid: str):
-        async with httpx.AsyncClient(timeout=15) as h:
-            r = await h.post(f"{QR_API}/app/1.0/web/1.0/login/qrcode",
-                             params={"account": uid, "app": "web"})
-            payload = r.json()
+        payload = await _req_json(
+            "POST", f"{QR_API}/app/1.0/web/1.0/login/qrcode",
+            params={"account": uid, "app": "web"})
         if not payload.get("state"):
             raise CloudError("扫码登录失败")
         cookie = (payload.get("data") or {}).get("cookie") or {}
         cookie_str = "; ".join(f"{k}={v}" for k, v in cookie.items())
-        COOKIES_PATH.write_text(cookie_str)
+        db.set_secret("115_cookie", cookie_str)  # 加密存储，不落明文
         self._pending_qr.pop(uid, None)
         self._load_client()
 
     def logout(self):
+        db.set_secret("115_cookie", "")
         COOKIES_PATH.unlink(missing_ok=True)
         self._client = None
 

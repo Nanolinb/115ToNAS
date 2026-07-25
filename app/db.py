@@ -101,5 +101,26 @@ def set_setting(key, value):
         "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, str(value)))
 
 
+# ---------- 敏感设置（AES-GCM 加密存储） ----------
+
+from . import crypto  # noqa: E402
+
+
+def get_secret(key, default=""):
+    """读取加密的敏感设置；发现旧明文时自动迁移为密文。"""
+    v = get_setting(key, None)
+    if v is None:
+        return default
+    plain = crypto.decrypt(v)
+    if plain and not crypto.is_encrypted(v):
+        set_setting(key, crypto.encrypt(plain))
+    return plain
+
+
+def set_secret(key, value):
+    value = (value or "").strip()
+    set_setting(key, crypto.encrypt(value) if value else "")
+
+
 def now():
     return int(time.time())

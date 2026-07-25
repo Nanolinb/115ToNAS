@@ -42,7 +42,7 @@ def _pick_sub(subs: list) -> dict | None:
 
 
 async def search_and_download(video_path: Path, title: str, year: int | None) -> Path | None:
-    token = db.get_setting("assrt_token", "").strip()
+    token = db.get_secret("assrt_token", "").strip()
     if not token or not title:
         return None
     query = f"{title} {year}" if year else title
