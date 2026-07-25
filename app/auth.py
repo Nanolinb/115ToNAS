@@ -1,9 +1,16 @@
 """双通道鉴权：
 - 管理端（admin）：115登录/下载/设置，必须密码（首次使用先设置）
 - 观影端（viewer）：海报墙/播放，默认免密；可单独设置观影密码
+
+安全设计：
+- 密码 PBKDF2-HMAC-SHA256（26 万次迭代）加盐存储；旧 SHA-256 格式验证通过后自动升级
+- 全链路 hmac.compare_digest 常量时间比较，防时序侧信道
+- 登录接口按来源 IP 限流：10 分钟内失败 5 次锁定 10 分钟（内存计数，重启清零）
 """
 import hashlib
+import hmac
 import secrets
+import time
 
 from fastapi import HTTPException, Request
 
@@ -12,17 +19,34 @@ from . import db
 SESSION_TTL = 30 * 86400  # 30 天
 COOKIE_NAME = "mh_session"
 
+_PBKDF2_ITER = 260_000
+
 
 def _hash(pw: str) -> str:
     salt = secrets.token_hex(16)
-    return f"{salt}:{hashlib.sha256((salt + pw).encode()).hexdigest()}"
+    digest = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt),
+                                 _PBKDF2_ITER).hex()
+    return f"pbkdf2${_PBKDF2_ITER}${salt}${digest}"
 
 
-def _check(pw: str, stored: str | None) -> bool:
-    if not stored:
+def _verify_pbkdf2(pw: str, stored: str) -> bool:
+    try:
+        _, iters, salt, digest = stored.split("$", 3)
+        calc = hashlib.pbkdf2_hmac("sha256", pw.encode(), bytes.fromhex(salt),
+                                   int(iters)).hex()
+        return hmac.compare_digest(calc, digest)
+    except (ValueError, TypeError):
         return False
-    salt, digest = stored.split(":", 1)
-    return hashlib.sha256((salt + pw).encode()).hexdigest() == digest
+
+
+def _verify_legacy(pw: str, stored: str) -> bool:
+    """旧格式 salt:sha256(salt+pw)，常量时间比较。"""
+    try:
+        salt, digest = stored.split(":", 1)
+    except ValueError:
+        return False
+    calc = hashlib.sha256((salt + pw).encode()).hexdigest()
+    return hmac.compare_digest(calc, digest)
 
 
 # ---------- 管理端密码 ----------
@@ -36,7 +60,15 @@ def set_password(pw: str):
 
 
 def verify(pw: str) -> bool:
-    return _check(pw, db.get_setting("password_hash"))
+    stored = db.get_setting("password_hash")
+    if not stored:
+        return False
+    if stored.startswith("pbkdf2$"):
+        return _verify_pbkdf2(pw, stored)
+    if _verify_legacy(pw, stored):
+        set_password(pw)  # 旧格式验证通过 → 就地升级为 PBKDF2
+        return True
+    return False
 
 
 # ---------- 观影端密码（可选） ----------
@@ -53,7 +85,41 @@ def set_viewer_password(pw: str):
 
 
 def verify_viewer(pw: str) -> bool:
-    return _check(pw, db.get_setting("viewer_password_hash"))
+    stored = db.get_setting("viewer_password_hash")
+    if not stored:
+        return False
+    if stored.startswith("pbkdf2$"):
+        return _verify_pbkdf2(pw, stored)
+    if _verify_legacy(pw, stored):
+        set_viewer_password(pw)
+        return True
+    return False
+
+
+# ---------- 登录限流（防在线爆破） ----------
+
+_RATE_WINDOW = 600      # 统计窗口 10 分钟
+_RATE_MAX_FAILS = 5     # 窗口内允许失败次数
+_RATE_LOCK = 600        # 锁定时长 10 分钟
+_fails: dict[str, list[float]] = {}
+
+
+def rate_locked(key: str) -> int:
+    """返回剩余锁定秒数；0 = 未锁定。"""
+    now = time.time()
+    fails = [t for t in _fails.get(key, []) if now - t < _RATE_WINDOW]
+    _fails[key] = fails
+    if len(fails) >= _RATE_MAX_FAILS:
+        return int(_RATE_LOCK - (now - fails[-1])) or 1
+    return 0
+
+
+def rate_record_fail(key: str):
+    _fails.setdefault(key, []).append(time.time())
+
+
+def rate_clear(key: str):
+    _fails.pop(key, None)
 
 
 # ---------- 会话 ----------
