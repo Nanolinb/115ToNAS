@@ -172,27 +172,38 @@ async function openPosterPicker(mediaId) {
   if (!data.items.length) { toast('没有找到候选封面'); return; }
   const SRC_LABEL = { subhd: 'SubHD', douban: '豆瓣', baidu: '百度' };
   const modal = $('#detailModal');
-  modal.innerHTML = `<div class="mhead"><h3>点击一张设为封面</h3><button class="mclose" data-close="detailMask">✕</button></div>
+  modal.innerHTML = `<div class="mhead"><h3>点选一张，再按「设为封面」确认</h3><button class="mclose" data-close="detailMask">✕</button></div>
     <div class="mbody"><div class="poster-pick-grid">` +
     data.items.map((it) => `<div style="position:relative">
       <img src="${esc(it.display)}" data-url="${esc(it.url)}" loading="lazy" referrerpolicy="no-referrer">
       <span style="position:absolute;left:4px;top:4px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;padding:1px 5px;border-radius:4px">${SRC_LABEL[it.source] || ''}</span>
     </div>`).join('') +
-    `</div></div>`;
+    `</div>
+    <div style="margin-top:12px;text-align:right"><button class="btn primary" data-confirm disabled>设为封面</button></div></div>`;
+  const confirmBtn = modal.querySelector('[data-confirm]');
+  let picked = null;
   modal.querySelectorAll('img[data-url]').forEach((img) =>
-    img.addEventListener('click', async () => {
-      modal.querySelectorAll('img[data-url]').forEach((i) => i.style.opacity = .4);
+    img.addEventListener('click', () => {
+      modal.querySelectorAll('img[data-url]').forEach((i) => {
+        i.style.opacity = .45; i.style.outline = 'none';
+      });
       img.style.opacity = 1; img.style.outline = '3px solid var(--accent2)';
-      try {
-        await api(`/api/media/${mediaId}/poster`, { method: 'POST', body: { url: img.dataset.url } });
-        toast('封面已更新');
-        $('#detailMask').classList.add('hidden');
-        loadLibrary();
-      } catch (e) {
-        toast(e.message);
-        modal.querySelectorAll('img[data-url]').forEach((i) => i.style.opacity = 1);
-      }
+      picked = img;
+      confirmBtn.disabled = false;
     }));
+  confirmBtn.addEventListener('click', async () => {
+    if (!picked) return;
+    confirmBtn.disabled = true; confirmBtn.textContent = '下载中…';
+    try {
+      await api(`/api/media/${mediaId}/poster`, { method: 'POST', body: { url: picked.dataset.url } });
+      toast('封面已更新');
+      $('#detailMask').classList.add('hidden');
+      loadLibrary();
+    } catch (e) {
+      toast(e.message);
+      confirmBtn.disabled = false; confirmBtn.textContent = '设为封面';
+    }
+  });
   bindModalClosers(modal);
 }
 
