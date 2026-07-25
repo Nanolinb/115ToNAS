@@ -182,7 +182,7 @@ async def _download(task: dict):
     db.exe("UPDATE tasks SET status='downloading', error='', updated_at=? WHERE id=?",
            (db.now(), tid))
 
-    if not cloud.is_logged_in():
+    if not await asyncio.to_thread(cloud.is_logged_in):
         raise CloudError("115 未登录，请先在网页端扫码登录")
     url = await cloud.get_download_url(task["pickcode"])
 

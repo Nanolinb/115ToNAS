@@ -368,27 +368,50 @@ async def media_remove(media_id: int):
 
 # ---------------- 封面（subhd/豆瓣/百度三源 + 本地上传） ----------------
 
+_POSTER_CAND_CACHE: dict = {}  # (media_id, kw) -> (ts, items)，预取结果缓存 10 分钟
+
+
+async def _gather_posters(kw: str, want: int) -> list:
+    """按源顺序收集封面候选。want>0 为预取模式（只要 subhd+豆瓣，够数即停，求快）；
+    want<=0 为全量（subhd 6 + 豆瓣 6 + 百度 12）。"""
+    from . import douban, subhd
+    items = []
+    for u in await subhd.search_posters(kw, want if want > 0 else 6):
+        items.append({"display": u, "url": u, "source": "subhd"})
+    if want <= 0 or len(items) < want:
+        for u in await douban.search_posters(kw, (want - len(items)) if want > 0 else 6):
+            items.append({"display": f"/api/imgproxy?u={quote(u)}",
+                          "url": u, "source": "douban"})
+    if want <= 0:
+        for u in await baiduimg.search_posters(f"{kw} 海报", 12):
+            items.append({"display": u, "url": u, "source": "baidu"})
+    return items[:want] if want > 0 else items
+
+
 @app.get("/api/media/{media_id}/poster_candidates")
-async def poster_candidates(media_id: int, q: str = ""):
-    """封面候选墙：subhd（豆瓣海报图）→ 豆瓣 → 百度图片。
+async def poster_candidates(media_id: int, q: str = "", limit: int = 0):
+    """封面候选墙。limit>0：快速预取（结果缓存 10 分钟，详情弹窗打开时后台调用，
+    让「更换封面」点开即有候选）；limit=0：全量三源搜索（「更多图片」按钮）。
     默认搜索词从文件名解析关键信息；豆瓣图有防盗链，显示走 /api/imgproxy。"""
     row = db.one("SELECT title, name_cn, year, path FROM media WHERE id=?", (media_id,))
     if not row:
         raise HTTPException(404, "not found")
-    from . import douban, parser as _parser, subhd
+    from . import parser as _parser
     info = _parser.parse(Path(row["path"]).name)
     base = row["name_cn"] or info["title"] or row["title"]
     yr = row["year"] or info["year"] or ""
     kw = q.strip() or f"{base} {yr}".strip()
-    items = []
-    for u in await subhd.search_posters(kw, 6):
-        items.append({"display": u, "url": u, "source": "subhd"})
-    for u in await douban.search_posters(kw, 6):
-        items.append({"display": f"/api/imgproxy?u={quote(u)}",
-                      "url": u, "source": "douban"})
-    for u in await baiduimg.search_posters(f"{kw} 海报", 12):
-        items.append({"display": u, "url": u, "source": "baidu"})
-    return {"items": items, "query": kw}
+    if limit > 0:
+        key = (media_id, kw)
+        hit = _POSTER_CAND_CACHE.get(key)
+        if hit and time.time() - hit[0] < 600:
+            return {"items": hit[1], "query": kw}
+        items = await _gather_posters(kw, min(limit, 10))
+        if len(_POSTER_CAND_CACHE) > 200:
+            _POSTER_CAND_CACHE.clear()
+        _POSTER_CAND_CACHE[key] = (time.time(), items)
+        return {"items": items, "query": kw}
+    return {"items": await _gather_posters(kw, 0), "query": kw}
 
 
 @app.get("/api/imgproxy")

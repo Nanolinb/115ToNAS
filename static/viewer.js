@@ -158,39 +158,77 @@ async function openDetail(key) {
       };
       inp.click();
     }));
+  // 后台预取封面候选（最多 5 张，服务端缓存），点「更换封面」时秒开
+  if (state.adminAuthed) {
+    const pid = e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id);
+    if (pid) api(`/api/media/${pid}/poster_candidates?limit=5`).catch(() => {});
+  }
   bindModalClosers(modal);
 }
 
 /* ---------- 更换封面（subhd/豆瓣/百度三源，仅管理端会话可见） ---------- */
 
 async function openPosterPicker(mediaId) {
-  const kw = prompt('输入搜图关键词（留空自动用文件名解析）:') || '';
-  let data;
-  try {
-    data = await api(`/api/media/${mediaId}/poster_candidates?q=${encodeURIComponent(kw)}`);
-  } catch (e) { toast(e.message); return; }
-  if (!data.items.length) { toast('没有找到候选封面'); return; }
   const SRC_LABEL = { subhd: 'SubHD', douban: '豆瓣', baidu: '百度' };
   const modal = $('#detailModal');
   modal.innerHTML = `<div class="mhead"><h3>点选一张，再按「设为封面」确认</h3><button class="mclose" data-close="detailMask">✕</button></div>
-    <div class="mbody"><div class="poster-pick-grid">` +
-    data.items.map((it) => `<div style="position:relative">
-      <img src="${esc(it.display)}" data-url="${esc(it.url)}" loading="lazy" referrerpolicy="no-referrer">
-      <span style="position:absolute;left:4px;top:4px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;padding:1px 5px;border-radius:4px">${SRC_LABEL[it.source] || ''}</span>
-    </div>`).join('') +
-    `</div>
+    <div class="mbody">
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <input data-kw type="text" placeholder="搜图关键词（留空自动用文件名解析）"
+        style="flex:1;padding:6px 10px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;color:var(--text)">
+      <button class="btn" data-search>搜索</button>
+      <button class="btn" data-more>更多图片</button>
+    </div>
+    <div class="poster-pick-grid" data-grid></div>
     <div style="margin-top:12px;text-align:right"><button class="btn primary" data-confirm disabled>设为封面</button></div></div>`;
+  const grid = modal.querySelector('[data-grid]');
+  const kwInput = modal.querySelector('[data-kw]');
   const confirmBtn = modal.querySelector('[data-confirm]');
   let picked = null;
-  modal.querySelectorAll('img[data-url]').forEach((img) =>
-    img.addEventListener('click', () => {
-      modal.querySelectorAll('img[data-url]').forEach((i) => {
-        i.style.opacity = .45; i.style.outline = 'none';
-      });
-      img.style.opacity = 1; img.style.outline = '3px solid var(--accent2)';
-      picked = img;
-      confirmBtn.disabled = false;
-    }));
+
+  function renderGrid(items) {
+    picked = null;
+    confirmBtn.disabled = true;
+    if (!items.length) {
+      grid.innerHTML = '<div style="opacity:.6;padding:20px 0">没有找到候选封面，换个关键词或点「更多图片」试试</div>';
+      return;
+    }
+    grid.innerHTML = items.map((it) => `<div style="position:relative">
+      <img src="${esc(it.display)}" data-url="${esc(it.url)}" loading="lazy" referrerpolicy="no-referrer">
+      <span style="position:absolute;left:4px;top:4px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;padding:1px 5px;border-radius:4px">${SRC_LABEL[it.source] || ''}</span>
+    </div>`).join('');
+    grid.querySelectorAll('img[data-url]').forEach((img) =>
+      img.addEventListener('click', () => {
+        grid.querySelectorAll('img[data-url]').forEach((i) => {
+          i.style.opacity = .45; i.style.outline = 'none';
+        });
+        img.style.opacity = 1; img.style.outline = '3px solid var(--accent2)';
+        picked = img;
+        confirmBtn.disabled = false;
+      }));
+  }
+
+  async function load(url, btn) {
+    let orig;
+    if (btn) { orig = btn.textContent; btn.disabled = true; btn.textContent = '搜索中…'; }
+    try {
+      const data = await api(url);
+      if (data.query && !kwInput.value) kwInput.value = data.query;
+      renderGrid(data.items);
+    } catch (e) { toast(e.message); }
+    if (btn) { btn.disabled = false; btn.textContent = orig; }
+  }
+
+  const q = () => `q=${encodeURIComponent(kwInput.value.trim())}`;
+  const searchBtn = modal.querySelector('[data-search]');
+  const moreBtn = modal.querySelector('[data-more]');
+  searchBtn.addEventListener('click', () =>
+    load(`/api/media/${mediaId}/poster_candidates?${q()}`, searchBtn));
+  moreBtn.addEventListener('click', () =>
+    load(`/api/media/${mediaId}/poster_candidates?${q()}`, moreBtn));
+  kwInput.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter') { ev.preventDefault(); searchBtn.click(); }
+  });
   confirmBtn.addEventListener('click', async () => {
     if (!picked) return;
     confirmBtn.disabled = true; confirmBtn.textContent = '下载中…';
@@ -205,6 +243,8 @@ async function openPosterPicker(mediaId) {
     }
   });
   bindModalClosers(modal);
+  // 首批：命中打开详情时的预取缓存，立即有候选
+  load(`/api/media/${mediaId}/poster_candidates?limit=5`, null);
 }
 
 /* ---------- 手动匹配（仅管理端会话可见） ---------- */
