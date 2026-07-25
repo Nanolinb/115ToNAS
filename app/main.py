@@ -65,6 +65,16 @@ async def auth_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    """基础安全响应头：防 MIME 嗅探 / 防点击劫持 / 不泄露来源。"""
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    return resp
+
+
 # ---------------- 静态页面 ----------------
 
 @app.get("/", response_class=HTMLResponse)
@@ -85,6 +95,10 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.post("/api/auth/login")
 async def login(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    locked = auth.rate_locked(f"login:{client_ip}")
+    if locked:
+        raise HTTPException(429, f"失败次数过多，请 {locked // 60 + 1} 分钟后再试")
     body = await request.json()
     pw = body.get("password", "")
     if not auth.is_configured():
@@ -92,7 +106,9 @@ async def login(request: Request):
             raise HTTPException(400, "密码至少 4 位")
         auth.set_password(pw)
     elif not auth.verify(pw):
+        auth.rate_record_fail(f"login:{client_ip}")
         raise HTTPException(403, "密码错误")
+    auth.rate_clear(f"login:{client_ip}")
     token = auth.create_session("admin")
     resp = JSONResponse({"ok": True})
     resp.set_cookie(auth.COOKIE_NAME, token, max_age=auth.SESSION_TTL,
@@ -117,9 +133,15 @@ async def logout(request: Request):
 
 @app.post("/api/auth/password")
 async def change_password(request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    locked = auth.rate_locked(f"pw:{client_ip}")
+    if locked:
+        raise HTTPException(429, f"失败次数过多，请 {locked // 60 + 1} 分钟后再试")
     body = await request.json()
     if not auth.verify(body.get("old", "")):
+        auth.rate_record_fail(f"pw:{client_ip}")
         raise HTTPException(403, "原密码错误")
+    auth.rate_clear(f"pw:{client_ip}")
     if len(body.get("new", "")) < 4:
         raise HTTPException(400, "新密码至少 4 位")
     auth.set_password(body["new"])
@@ -145,8 +167,14 @@ async def viewer_login(request: Request):
     body = await request.json()
     if not auth.viewer_configured():
         return {"ok": True}  # 未设观影密码，无需登录
+    client_ip = request.client.host if request.client else "unknown"
+    locked = auth.rate_locked(f"vlogin:{client_ip}")
+    if locked:
+        raise HTTPException(429, f"失败次数过多，请 {locked // 60 + 1} 分钟后再试")
     if not auth.verify_viewer(body.get("password", "")):
+        auth.rate_record_fail(f"vlogin:{client_ip}")
         raise HTTPException(403, "观影密码错误")
+    auth.rate_clear(f"vlogin:{client_ip}")
     token = auth.create_session("viewer")
     resp = JSONResponse({"ok": True})
     resp.set_cookie(auth.COOKIE_NAME, token, max_age=auth.SESSION_TTL,
@@ -549,6 +577,9 @@ async def get_settings():
             out[k] = _mask_secret(db.get_secret(k, dft))
         else:
             out[k] = db.get_setting(k, dft)
+    # TMDB 连通状态（只读，刮削时自动更新）：direct / proxy / fail
+    out["tmdb_net"] = db.get_setting("tmdb_net", "")
+    out["tmdb_net_at"] = db.get_setting("tmdb_net_at", "")
     return out
 
 
