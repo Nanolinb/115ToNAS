@@ -6,6 +6,7 @@ const state = {
   settings: {},
   cloud: { cid: '0', path: [], items: [], selected: new Map(), sort: 'time_desc' },
   taskTimer: null,
+  taskSel: new Set(),
   qrUid: null,
   qrTimer: null,
   dirPickTarget: null,
@@ -239,6 +240,9 @@ async function loadTasks() {
   const active = items.filter((t) => ['queued', 'downloading'].includes(t.status)).length;
   $('#taskBadge').textContent = active ? `(${active})` : '';
   $('#taskEmpty').classList.toggle('hidden', items.length > 0);
+  // 列表每 2s 轮询重绘：清理已消失任务的勾选，保留其余勾选状态
+  const alive = new Set(items.map((t) => t.id));
+  [...state.taskSel].forEach((id) => { if (!alive.has(id)) state.taskSel.delete(id); });
   $('#taskList').innerHTML = items.map((t) => {
     const pct = t.size ? Math.min(100, (t.downloaded / t.size * 100)) : 0;
     const [label, color] = TASK_STATUS[t.status] || [t.status, 'var(--muted)'];
@@ -252,8 +256,10 @@ async function loadTasks() {
     if (['done', 'failed', 'canceled'].includes(t.status))
       btns.push(`<button class="btn small danger" data-act="delete" data-id="${t.id}">删除记录</button>`);
     const pcls = t.status === 'done' ? 'done' : (t.status === 'failed' ? 'failed' : '');
+    const checked = state.taskSel.has(t.id) ? 'checked' : '';
     return `<div class="task-card">
       <div class="tline1">
+        <input type="checkbox" data-tsel="${t.id}" ${checked} style="flex-shrink:0">
         <span class="tname">${esc(t.name)}</span>
         <span class="tstatus" style="color:${color}">${label}${t.error ? ' · ' + esc(t.error) : ''}</span>
       </div>
@@ -266,12 +272,28 @@ async function loadTasks() {
       </div>
     </div>`;
   }).join('');
+  updateTaskSelUI();
+  $('#taskList').querySelectorAll('[data-tsel]').forEach((el) =>
+    el.addEventListener('change', () => {
+      if (el.checked) state.taskSel.add(el.dataset.tsel);
+      else state.taskSel.delete(el.dataset.tsel);
+      updateTaskSelUI();
+    }));
   $('#taskList').querySelectorAll('[data-act]').forEach((b) =>
     b.addEventListener('click', async () => {
       try { await api(`/api/tasks/${b.dataset.id}/${b.dataset.act}`, { method: 'POST' }); }
       catch (e) { toast(e.message); }
       loadTasks();
     }));
+}
+
+function updateTaskSelUI() {
+  const n = state.taskSel.size;
+  $('#taskSelCount').textContent = n;
+  $('#btnRetargetSel').classList.toggle('hidden', n === 0);
+  $('#btnDelTaskSel').classList.toggle('hidden', n === 0);
+  const boxes = $$('#taskList [data-tsel]');
+  $('#taskSelAll').checked = n > 0 && n === boxes.length;
 }
 
 /* ---------- 文件管理 ---------- */
@@ -498,17 +520,37 @@ function bindEvents() {
   });
 
   // 下载任务批量操作
-  const batchAction = async (action) => {
+  const batchAction = async (action, extra = {}) => {
     try {
-      const r = await api('/api/tasks/batch', { method: 'POST', body: { action } });
-      toast(`已处理 ${r.affected} 个任务`);
+      const r = await api('/api/tasks/batch', { method: 'POST', body: { action, ...extra } });
+      toast(`已处理 ${r.affected} 个任务` +
+        (r.skipped ? `，跳过 ${r.skipped} 个（状态不允许）` : ''));
     } catch (e) { toast(e.message); }
+    state.taskSel.clear();
     loadTasks();
   };
   $('#btnPauseAll').addEventListener('click', () => batchAction('pause_all'));
   $('#btnResumeAll').addEventListener('click', () => batchAction('resume_all'));
   $('#btnClearDone').addEventListener('click', () => {
     if (confirm('清空全部已完成的下载记录？（不删除已下载的文件）')) batchAction('clear_done');
+  });
+  $('#taskSelAll').addEventListener('change', (e) => {
+    state.taskSel.clear();
+    if (e.target.checked)
+      $$('#taskList [data-tsel]').forEach((el) => state.taskSel.add(el.dataset.tsel));
+    loadTasks();
+  });
+  $('#btnRetargetSel').addEventListener('click', () => {
+    const ids = [...state.taskSel];
+    if (!ids.length) return;
+    openDirPicker((dstDir) =>
+      batchAction('retarget', { ids, target_dir: dstDir }));
+  });
+  $('#btnDelTaskSel').addEventListener('click', () => {
+    const ids = [...state.taskSel];
+    if (!ids.length) return;
+    if (confirm(`删除所选 ${ids.length} 个任务？记录与未完成的临时文件（.part）一并删除，已下载完成的文件不受影响。`))
+      batchAction('delete', { ids });
   });
 
   // 文件管理

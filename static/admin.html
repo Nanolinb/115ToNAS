@@ -56,12 +56,17 @@
   <!-- 下载任务 -->
   <section id="page-tasks" class="hidden">
     <div class="toolbar">
-      <span style="color:var(--muted);font-size:13px">串行下载，保护 NAS 资源；支持断点续传</span>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--muted)">
+        <input type="checkbox" id="taskSelAll"> 全选
+      </label>
+      <button class="btn hidden" id="btnRetargetSel">改存储位置</button>
+      <button class="btn danger hidden" id="btnDelTaskSel">删除所选 (<span id="taskSelCount">0</span>)</button>
       <span style="flex:1"></span>
       <button class="btn" id="btnPauseAll">全部暂停</button>
       <button class="btn" id="btnResumeAll">全部启动</button>
       <button class="btn danger" id="btnClearDone">清空已下载</button>
     </div>
+    <div style="color:var(--muted);font-size:12px;margin:-6px 0 10px">串行下载，保护 NAS 资源；支持断点续传。删除所选会一并删除未完成的临时文件（.part），不动已下载完成的文件</div>
     <div id="taskList"></div>
     <div class="empty hidden" id="taskEmpty">暂无下载任务</div>
   </section>

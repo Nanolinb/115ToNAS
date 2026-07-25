@@ -646,17 +646,32 @@ async def tasks():
 
 @app.post("/api/tasks/batch")
 async def tasks_batch(request: Request):
-    """批量操作：pause_all 全部暂停 / resume_all 全部启动 / clear_done 清空已下载。"""
-    action = (await request.json()).get("action", "")
+    """批量操作：pause_all 全部暂停 / resume_all 全部启动 / clear_done 清空已下载 /
+    retarget 改存储位置（ids + target_dir）/ delete 删记录与临时文件（ids）。"""
+    body = await request.json()
+    action = body.get("action", "")
+    skipped = 0
     if action == "pause_all":
         n = downloader.pause_all()
     elif action == "resume_all":
         n = downloader.resume_all()
     elif action == "clear_done":
         n = downloader.clear_done()
+    elif action == "retarget":
+        ids = [str(i) for i in (body.get("ids") or [])]
+        target = (body.get("target_dir") or "").strip()
+        if not ids or not target:
+            raise HTTPException(400, "缺少任务或目标目录")
+        _safe_under_root(target)  # 目标目录必须在媒体挂载内
+        n, skipped = downloader.retarget_tasks(ids, target)
+    elif action == "delete":
+        ids = [str(i) for i in (body.get("ids") or [])]
+        if not ids:
+            raise HTTPException(400, "未选择任务")
+        n, skipped = downloader.delete_tasks(ids)
     else:
         raise HTTPException(400, "未知操作")
-    return {"ok": True, "affected": n}
+    return {"ok": True, "affected": n, "skipped": skipped}
 
 
 @app.post("/api/tasks/{task_id}/{action}")

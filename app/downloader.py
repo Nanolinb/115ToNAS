@@ -1,5 +1,6 @@
 """下载队列：串行下载（默认 1 个并发，保护 NAS 资源）、断点续传、限速、暂停/取消。"""
 import asyncio
+import shutil
 import time
 import uuid
 from pathlib import Path
@@ -108,6 +109,51 @@ def clear_done() -> int:
     n = db.one("SELECT COUNT(*) AS c FROM tasks WHERE status='done'")["c"]
     db.exe("DELETE FROM tasks WHERE status='done'")
     return n
+
+
+def _part_of(row: dict) -> Path:
+    return Path(row["target_dir"]) / (row["name"] + ".part")
+
+
+def retarget_tasks(ids: list[str], target_dir: str) -> tuple[int, int]:
+    """批量修改存储位置：仅排队/暂停/失败/已取消的任务（下载中、已完成跳过）；
+    有 .part 临时文件的一并搬走，保住断点续传进度。返回 (成功数, 跳过数)。"""
+    updated = skipped = 0
+    for tid in ids:
+        row = db.one("SELECT status,name,target_dir FROM tasks WHERE id=?", (tid,))
+        if not row or row["status"] in ("downloading", "done"):
+            skipped += 1
+            continue
+        part = _part_of(row)
+        if part.exists():
+            try:
+                Path(target_dir).mkdir(parents=True, exist_ok=True)
+                shutil.move(str(part), str(Path(target_dir) / part.name))
+            except OSError:
+                skipped += 1  # 搬不动就不改库，避免丢续传进度
+                continue
+        db.exe("UPDATE tasks SET target_dir=?, updated_at=? WHERE id=?",
+               (target_dir, db.now(), tid))
+        updated += 1
+    return updated, skipped
+
+
+def delete_tasks(ids: list[str]) -> tuple[int, int]:
+    """批量删除任务记录：未完成的 .part 临时文件一并删除（不动已下载完成的文件）。
+    下载中的任务跳过（先暂停/取消再删）。返回 (删除数, 跳过数)。"""
+    deleted = skipped = 0
+    for tid in ids:
+        row = db.one("SELECT status,name,target_dir FROM tasks WHERE id=?", (tid,))
+        if not row or row["status"] == "downloading":
+            skipped += 1
+            continue
+        try:
+            _part_of(row).unlink(missing_ok=True)
+        except OSError:
+            pass
+        db.exe("DELETE FROM tasks WHERE id=?", (tid,))
+        deleted += 1
+    return deleted, skipped
 
 
 async def start_worker():
