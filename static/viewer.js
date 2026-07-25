@@ -89,6 +89,7 @@ async function openDetail(key) {
   const adminBtns = state.adminAuthed ? `
     ${e.kind === 'movie' ? `<button class="btn" data-subs="${e.id}">搜索字幕</button>` : ''}
     <button class="btn" data-poster="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">更换封面</button>
+    <button class="btn" data-upload="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">上传封面</button>
     <button class="btn" data-rematch="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">重新匹配信息</button>` : '';
   let html = `
     <div class="detail-hero">${heroImg}<div class="fade"></div></div>
@@ -135,22 +136,48 @@ async function openDetail(key) {
     b.addEventListener('click', () => openRematch(+b.dataset.rematch)));
   modal.querySelectorAll('[data-poster]').forEach((b) =>
     b.addEventListener('click', () => openPosterPicker(+b.dataset.poster)));
+  modal.querySelectorAll('[data-upload]').forEach((b) =>
+    b.addEventListener('click', () => {
+      const inp = document.createElement('input');
+      inp.type = 'file';
+      inp.accept = 'image/jpeg,image/png,image/webp,image/gif';
+      inp.onchange = async () => {
+        const f = inp.files[0];
+        if (!f) return;
+        b.disabled = true; b.textContent = '上传中…';
+        try {
+          const r = await fetch(`/api/media/${b.dataset.upload}/poster_upload`,
+            { method: 'POST', body: f });
+          const j = await r.json();
+          if (!r.ok) throw new Error(j.detail || `HTTP ${r.status}`);
+          toast('封面已更新');
+          $('#detailMask').classList.add('hidden');
+          loadLibrary();
+        } catch (err) { toast(err.message); }
+        b.disabled = false; b.textContent = '上传封面';
+      };
+      inp.click();
+    }));
   bindModalClosers(modal);
 }
 
-/* ---------- 更换封面（百度图片源，仅管理端会话可见） ---------- */
+/* ---------- 更换封面（subhd/豆瓣/百度三源，仅管理端会话可见） ---------- */
 
 async function openPosterPicker(mediaId) {
-  const kw = prompt('输入搜图关键词（留空用默认片名）:') || '';
+  const kw = prompt('输入搜图关键词（留空自动用文件名解析）:') || '';
   let data;
   try {
     data = await api(`/api/media/${mediaId}/poster_candidates?q=${encodeURIComponent(kw)}`);
   } catch (e) { toast(e.message); return; }
-  if (!data.items.length) { toast('百度图片没有找到候选封面'); return; }
+  if (!data.items.length) { toast('没有找到候选封面'); return; }
+  const SRC_LABEL = { subhd: 'SubHD', douban: '豆瓣', baidu: '百度' };
   const modal = $('#detailModal');
-  modal.innerHTML = `<div class="mhead"><h3>点击一张设为封面（来源：百度图片）</h3><button class="mclose" data-close="detailMask">✕</button></div>
+  modal.innerHTML = `<div class="mhead"><h3>点击一张设为封面</h3><button class="mclose" data-close="detailMask">✕</button></div>
     <div class="mbody"><div class="poster-pick-grid">` +
-    data.items.map((u) => `<img src="${esc(u)}" data-url="${esc(u)}" loading="lazy" referrerpolicy="no-referrer">`).join('') +
+    data.items.map((it) => `<div style="position:relative">
+      <img src="${esc(it.display)}" data-url="${esc(it.url)}" loading="lazy" referrerpolicy="no-referrer">
+      <span style="position:absolute;left:4px;top:4px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;padding:1px 5px;border-radius:4px">${SRC_LABEL[it.source] || ''}</span>
+    </div>`).join('') +
     `</div></div>`;
   modal.querySelectorAll('img[data-url]').forEach((img) =>
     img.addEventListener('click', async () => {
@@ -172,8 +199,8 @@ async function openPosterPicker(mediaId) {
 /* ---------- 手动匹配（仅管理端会话可见） ---------- */
 
 async function openRematch(mediaId) {
-  const kw = prompt('输入用于 TMDB 搜索的片名（外文原名更准）:');
-  if (!kw) return;
+  const kw = prompt('输入用于 TMDB 搜索的片名（留空自动用文件名解析；外文原名更准）:');
+  if (kw === null) return;
   let cands;
   try {
     cands = (await api(`/api/media/${mediaId}/tmdb_candidates?q=${encodeURIComponent(kw)}`)).items;

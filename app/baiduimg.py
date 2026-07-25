@@ -15,6 +15,16 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 _HEADERS = {"User-Agent": UA, "Referer": "https://image.baidu.com/"}
 
 
+def _referer_for(url: str) -> str:
+    """各图床的防盗链 Referer（豆瓣无 Referer 返回 418）。"""
+    host = httpx.URL(url).host or ""
+    if host.endswith(".doubanio.com"):
+        return "https://www.douban.com/"
+    if host.endswith(".subhd.me"):
+        return "https://subhd.cc/"
+    return "https://image.baidu.com/"
+
+
 async def _clients(timeout: int):
     """直连 + （可选）代理客户端；部分网络下百度图床(img*.baidu.com)被拦截时走代理兜底。"""
     clients = [httpx.AsyncClient(timeout=timeout, headers=_HEADERS)]
@@ -66,6 +76,21 @@ async def search_posters(query: str, limit: int = 12) -> list:
     return out
 
 
+async def fetch_image(url: str) -> tuple | None:
+    """imgproxy 用：带 per-host Referer 抓图，成功返回 (内容, content-type)。"""
+    try:
+        async with httpx.AsyncClient(timeout=15,
+                                     headers={"User-Agent": UA}) as c:
+            r = await c.get(url, headers={"Referer": _referer_for(url)},
+                            follow_redirects=True)
+            ctype = r.headers.get("content-type", "")
+            if r.status_code == 200 and "image" in ctype and len(r.content) > 1000:
+                return r.content, ctype
+    except Exception:
+        pass
+    return None
+
+
 async def download_poster(url: str) -> str | None:
     """下载封面到本地缓存目录（直连失败走代理兜底，各 3 次重试），成功返回文件名。"""
     clients = await _clients(15)
@@ -73,7 +98,8 @@ async def download_poster(url: str) -> str | None:
         for c in clients:
             for attempt in range(3):
                 try:
-                    r = await c.get(url, follow_redirects=True)
+                    r = await c.get(url, headers={"Referer": _referer_for(url)},
+                                    follow_redirects=True)
                     ctype = r.headers.get("content-type", "")
                     if r.status_code == 200 and len(r.content) > 5000 and \
                             ("image" in ctype or url.lower().endswith(

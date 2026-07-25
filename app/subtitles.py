@@ -130,10 +130,23 @@ def _pick_for(subs: list, target: str) -> dict | None:
 
 
 async def search_and_download(video_path: Path, title: str, year: int | None) -> list:
-    """在线搜刮多语言字幕（简中 / 英文 / 中英双语），返回新保存的轨道列表。"""
-    token = db.get_secret("assrt_token", "").strip()
-    if not token or not title:
+    """在线搜刮多语言字幕（简中 / 英文 / 中英双语），返回新保存的轨道列表。
+    来源顺序：assrt（需 token）→ subhd.cc（免 token），只补缺的语言。"""
+    if not title:
         return []
+    saved = []
+    if db.get_secret("assrt_token", "").strip():
+        saved += await _assrt_download(video_path, title, year)
+    have = {t["lang"] for t in saved}
+    missing = [(t, sfx) for t, sfx in TRACK_TARGETS if t not in have]
+    if missing:
+        saved += await _subhd_download(video_path, title, year, missing)
+    return saved
+
+
+async def _assrt_download(video_path: Path, title: str, year: int | None) -> list:
+    """assrt.net 搜刮（需要设置页配置 token）。"""
+    token = db.get_secret("assrt_token", "").strip()
     saved = []
     try:
         async with httpx.AsyncClient(timeout=20) as client:
@@ -154,6 +167,52 @@ async def search_and_download(video_path: Path, title: str, year: int | None) ->
     return saved
 
 
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _relevance(video_stem: str, desc: str) -> int:
+    """subhd 候选与视频文件名的相关度：剧集集数不一致返回 -1（淘汰），
+    否则按去标签后的词元重合数计分（越大越可能是同一版本）。"""
+    vek, dek = _ep_key(video_stem), _ep_key(desc)
+    if vek and dek and vek != dek:
+        return -1
+    vt = set(_TOKEN_RE.findall(_TAG_RE.sub(" ", video_stem).lower()))
+    dt = set(_TOKEN_RE.findall(_TAG_RE.sub(" ", desc).lower()))
+    return len(vt & dt)
+
+
+async def _subhd_download(video_path: Path, title: str, year: int | None,
+                          targets: list) -> list:
+    """subhd.cc 搜刮（免 token）：按与文件名的相关度排序后逐语言挑第一条。"""
+    from . import subhd
+    saved = []
+    try:
+        async with subhd.client() as cli:
+            kw = f"{title} {year}" if year else title
+            items = await subhd.search_subs(cli, kw)
+            if not items and year:
+                items = await subhd.search_subs(cli, title)
+            if not items:
+                print(f"[subtitles] subhd 无匹配结果: {title} {year or ''}")
+                return []
+            vstem = video_path.stem
+            scored = [it for it in items if _relevance(vstem, it["desc"]) >= 0]
+            scored.sort(key=lambda it: _relevance(vstem, it["desc"]), reverse=True)
+            for target, suffix in targets:
+                cand = next((it for it in scored if it["lang"] == target), None)
+                if not cand:
+                    continue
+                raw = await subhd.download_sub(cli, cand["sid"])
+                if not raw:
+                    continue
+                track = _save_raw(video_path, raw, suffix, target)
+                if track:
+                    saved.append(track)
+    except Exception as e:
+        print(f"[subtitles] subhd 搜刮失败 {title}: {type(e).__name__} {e}")
+    return saved
+
+
 async def _search_candidates(client: httpx.AsyncClient, token: str,
                              title: str, year: int | None) -> list:
     query = f"{title} {year}" if year else title
@@ -166,6 +225,38 @@ async def _search_candidates(client: httpx.AsyncClient, token: str,
         if alt != title:
             subs = await _search(client, token, alt)
     return subs
+
+
+def _save_raw(video_path: Path, raw: bytes, suffix: str, lang: str) -> dict | None:
+    """把字幕内容存到视频旁（<视频主干><语言后缀>.<扩展名>）。
+    支持 zip 包（取第一条字幕，srt/vtt 优先）与 srt/ass/vtt 格式识别。"""
+    if raw[:4] == b"PK\x03\x04":  # zip 字幕包
+        import io
+        import zipfile
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                names = [n for n in z.namelist()
+                         if Path(n).suffix.lower() in SUB_EXTS
+                         and not Path(n).name.startswith(".")]
+                if not names:
+                    return None
+                names.sort(key=lambda n: Path(n).suffix.lower() not in (".vtt", ".srt"))
+                raw = z.read(names[0])
+        except zipfile.BadZipFile:
+            return None
+    head = raw[:200].decode("utf-8", errors="ignore")
+    if "[Script Info]" in head:
+        ext = ".ass"
+    elif head.startswith("WEBVTT"):
+        ext = ".vtt"
+    else:
+        ext = ".srt"
+    dest = video_path.with_suffix("").with_name(video_path.stem + suffix + ext)
+    if dest.exists():
+        return {"lang": lang, "label": LANG_META[lang], "path": str(dest)}
+    dest.write_bytes(_to_utf8(raw))
+    print(f"[subtitles] 字幕已保存: {dest.name}")
+    return {"lang": lang, "label": LANG_META[lang], "path": str(dest)}
 
 
 async def _download_one(client: httpx.AsyncClient, token: str, chosen: dict,
@@ -182,15 +273,7 @@ async def _download_one(client: httpx.AsyncClient, token: str, chosen: dict,
     if raw is None or len(raw) < 20:
         print(f"[subtitles] 字幕文件下载失败: {url[:80]}")
         return None
-    # 判定格式：ass 字幕有 [Script Info]，其余按 srt 处理
-    head = raw[:200].decode("utf-8", errors="ignore")
-    ext = ".ass" if "[Script Info]" in head else ".srt"
-    dest = video_path.with_suffix("").with_name(video_path.stem + suffix + ext)
-    if dest.exists():
-        return {"lang": lang, "label": LANG_META[lang], "path": str(dest)}
-    dest.write_bytes(_to_utf8(raw))
-    print(f"[subtitles] 字幕已保存: {dest.name}")
-    return {"lang": lang, "label": LANG_META[lang], "path": str(dest)}
+    return _save_raw(video_path, raw, suffix, lang)
 
 
 async def _get_json(client: httpx.AsyncClient, url: str, params: dict,

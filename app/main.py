@@ -4,8 +4,10 @@ import json
 import mimetypes
 import re
 import shutil
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import quote
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
@@ -320,7 +322,11 @@ async def tmdb_candidates(media_id: int, q: str = ""):
     if not row:
         raise HTTPException(404, "not found")
     kind = "tv" if row["type"] == "episode" else "movie"
-    return {"items": await tmdb_client.search_candidates(q or row["title"], kind)}
+    # 默认搜索词：从文件名解析关键信息（比库里的旧匹配标题更可靠）
+    from . import parser as _parser
+    info = _parser.parse(Path(row["path"]).name)
+    return {"items": await tmdb_client.search_candidates(
+        q or info["title"] or row["title"], kind)}
 
 
 @app.post("/api/media/{media_id}/rematch")
@@ -360,15 +366,77 @@ async def media_remove(media_id: int):
     return {"ok": True}
 
 
-# ---------------- 封面（百度图片源，国内直连） ----------------
+# ---------------- 封面（subhd/豆瓣/百度三源 + 本地上传） ----------------
 
 @app.get("/api/media/{media_id}/poster_candidates")
 async def poster_candidates(media_id: int, q: str = ""):
-    row = db.one("SELECT title, name_cn, year FROM media WHERE id=?", (media_id,))
+    """封面候选墙：subhd（豆瓣海报图）→ 豆瓣 → 百度图片。
+    默认搜索词从文件名解析关键信息；豆瓣图有防盗链，显示走 /api/imgproxy。"""
+    row = db.one("SELECT title, name_cn, year, path FROM media WHERE id=?", (media_id,))
     if not row:
         raise HTTPException(404, "not found")
-    query = q.strip() or f"{row['name_cn'] or row['title']} {row['year'] or ''} 海报"
-    return {"items": await baiduimg.search_posters(query, 15), "query": query}
+    from . import douban, parser as _parser, subhd
+    info = _parser.parse(Path(row["path"]).name)
+    base = row["name_cn"] or info["title"] or row["title"]
+    yr = row["year"] or info["year"] or ""
+    kw = q.strip() or f"{base} {yr}".strip()
+    items = []
+    for u in await subhd.search_posters(kw, 6):
+        items.append({"display": u, "url": u, "source": "subhd"})
+    for u in await douban.search_posters(kw, 6):
+        items.append({"display": f"/api/imgproxy?u={quote(u)}",
+                      "url": u, "source": "douban"})
+    for u in await baiduimg.search_posters(f"{kw} 海报", 12):
+        items.append({"display": u, "url": u, "source": "baidu"})
+    return {"items": items, "query": kw}
+
+
+@app.get("/api/imgproxy")
+async def imgproxy(u: str):
+    """防盗链图床的显示代理（仅白名单图床，防 SSRF 滥用）。"""
+    host = httpx_host(u)
+    if not (host.endswith(".doubanio.com") or host.endswith(".subhd.me")):
+        raise HTTPException(403, "不允许的图片来源")
+    got = await baiduimg.fetch_image(u)
+    if not got:
+        raise HTTPException(502, "图片抓取失败")
+    data, ctype = got
+    return Response(data, media_type=ctype,
+                    headers={"Cache-Control": "max-age=86400"})
+
+
+def httpx_host(url: str) -> str:
+    import httpx as _h
+    return (_h.URL(url).host or "").lower()
+
+
+_IMG_MAGIC = ((b"\xff\xd8", ".jpg"), (b"\x89PNG", ".png"),
+              (b"GIF8", ".gif"), (b"RIFF", ".webp"))
+
+
+@app.post("/api/media/{media_id}/poster_upload")
+async def poster_upload(media_id: int, request: Request):
+    """本地上传封面：请求体即图片字节（免 multipart 依赖），
+    魔数校验格式，剧集同剧共享。"""
+    row = db.one("SELECT id, type, tmdb_id FROM media WHERE id=?", (media_id,))
+    if not row:
+        raise HTTPException(404, "not found")
+    data = await request.body()
+    if len(data) < 500:
+        raise HTTPException(400, "不是有效的图片")
+    if len(data) > 15 * 1024 * 1024:
+        raise HTTPException(400, "图片不能超过 15MB")
+    ext = next((e for magic, e in _IMG_MAGIC if data.startswith(magic)), None)
+    if not ext:
+        raise HTTPException(400, "仅支持 JPG / PNG / GIF / WEBP")
+    fname = f"up_{media_id}_{int(time.time())}{ext}"
+    (POSTER_DIR / fname).write_bytes(data)
+    db.exe("UPDATE media SET poster=? WHERE id=?", (fname, media_id))
+    # 剧集：同剧其它集共享同一封面
+    if row["type"] == "episode" and row["tmdb_id"]:
+        db.exe("UPDATE media SET poster=? WHERE tmdb_id=?",
+               (fname, row["tmdb_id"]))
+    return {"ok": True, "poster": fname}
 
 
 @app.post("/api/media/{media_id}/poster")
