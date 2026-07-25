@@ -281,6 +281,32 @@ async function loadSettings() {
   $('#setAssrt').value = state.settings.assrt_token;
   $('#setSpeed').value = state.settings.speed_limit;
   $('#setAutoScan').value = state.settings.auto_scan;
+  renderTmdbNet();
+}
+
+/* TMDB 连通状态：刮削时自动更新。失败时在代理输入框内显示浅红提示（可覆盖） */
+function renderTmdbNet() {
+  const input = $('#setProxy');
+  const hint = $('#proxyHint');
+  const net = state.settings.tmdb_net || '';
+  const at = state.settings.tmdb_net_at
+    ? new Date(Number(state.settings.tmdb_net_at) * 1000).toLocaleString('zh-CN', { hour12: false })
+    : '';
+  input.classList.remove('warn');
+  if (net === 'direct') {
+    hint.innerHTML = '✅ TMDB <b style="color:var(--green)">直连正常</b>' +
+      (at ? `（最近尝试 ${at}）` : '') + '，无需配置代理。';
+  } else if (net === 'proxy') {
+    hint.innerHTML = '✅ TMDB 直连不通，<b style="color:var(--accent2)">当前经代理连通</b>' +
+      (at ? `（最近尝试 ${at}）` : '') + '。';
+  } else if (net === 'fail') {
+    input.classList.add('warn');
+    if (!input.value) input.placeholder = '⚠ TMDB 直连失败，请在此填代理地址（如 http://192.168.1.100:7890）';
+    hint.innerHTML = '⚠ <b style="color:var(--red)">TMDB 直连失败' +
+      (state.settings.proxy_url ? '，所配代理也不可用' : '且未配置代理') + '</b>' +
+      (at ? `（最近尝试 ${at}）` : '') +
+      '。每次下载/扫描会自动重试；若你的路由器已对 themoviedb.org 走代理，此处留空即可。';
+  }
 }
 
 async function saveSettings() {
@@ -295,6 +321,7 @@ async function saveSettings() {
     },
   });
   state.settings = await api('/api/settings');
+  renderTmdbNet();
   $('#settingsSaved').textContent = '已保存 ✓';
   setTimeout(() => { $('#settingsSaved').textContent = ''; }, 2500);
 }
