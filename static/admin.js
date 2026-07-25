@@ -4,7 +4,7 @@
 const state = {
   tab: 'cloud',
   settings: {},
-  cloud: { cid: '0', path: [], items: [], selected: new Map() },
+  cloud: { cid: '0', path: [], items: [], selected: new Map(), sort: 'time_desc' },
   taskTimer: null,
   qrUid: null,
   qrTimer: null,
@@ -54,13 +54,30 @@ function switchTab(tab) {
 
 /* ---------- 115 网盘 ---------- */
 
+function showCloudError(msg) {
+  const el = $('#cloudError');
+  el.innerHTML = `${esc(msg)} <button class="btn small" id="btnCloudRetry" style="margin-left:10px">重试</button>`;
+  el.classList.remove('hidden');
+  $('#btnCloudRetry').addEventListener('click', () => {
+    el.classList.add('hidden');
+    initCloud();
+  });
+}
+
 async function initCloud() {
-  const st = await api('/api/cloud/status');
+  let st;
+  try {
+    st = await api('/api/cloud/status');
+  } catch (e) {
+    showCloudError('无法连接服务器：' + e.message);
+    return;
+  }
   $('#cloudLogin').classList.toggle('hidden', st.logged_in);
   $('#cloudBrowser').classList.toggle('hidden', !st.logged_in);
+  $('#cloudError').classList.add('hidden');
   if (st.logged_in) {
     fillCloudTargets();
-    if (!state.cloud.items.length) loadCloudList('0');
+    if (!state.cloud.items.length) loadCloudList(state.cloud.cid || '0');
   }
 }
 
@@ -111,7 +128,17 @@ async function pollQr() {
 }
 
 async function loadCloudList(cid) {
-  const data = await api(`/api/cloud/list?cid=${encodeURIComponent(cid)}`);
+  const sort = state.cloud.sort || 'time_desc';
+  let data;
+  try {
+    data = await api(`/api/cloud/list?cid=${encodeURIComponent(cid)}&sort=${sort}`);
+  } catch (e) {
+    $('#cloudList').innerHTML =
+      `<div class="file-row dim"><span class="fname">加载失败：${esc(e.message)}</span>` +
+      `<button class="btn small" id="btnListRetry">重试</button></div>`;
+    $('#btnListRetry').addEventListener('click', () => loadCloudList(cid));
+    return;
+  }
   state.cloud.cid = cid;
   state.cloud.items = data.items;
   if (data.path && data.path.length) {
@@ -293,7 +320,12 @@ async function browseDir(path) {
 /* ---------- 启动 ---------- */
 
 async function boot() {
-  try { state.settings = await api('/api/settings'); } catch (e) { return; }
+  try { state.settings = await api('/api/settings'); }
+  catch (e) {
+    showCloudError('初始化失败：' + e.message + '（3 秒后自动重试）');
+    setTimeout(boot, 3000);
+    return;
+  }
   switchTab('cloud');
 }
 
@@ -311,6 +343,10 @@ function bindEvents() {
     loadCloudList('0');
   });
   $('#btnEnqueue').addEventListener('click', enqueueSelected);
+  $('#cloudSort').addEventListener('change', () => {
+    state.cloud.sort = $('#cloudSort').value;
+    loadCloudList(state.cloud.cid || '0');
+  });
 
   // 设置
   $('#btnSaveSettings').addEventListener('click', () => saveSettings().catch((e) => toast(e.message)));

@@ -24,7 +24,7 @@
   <section id="page-cloud">
     <div id="cloudLogin" class="cloud-login hidden">
       <h2>登录 115 网盘</h2>
-      <p style="color:var(--muted);font-size:13px;margin-top:8px">用手机 115 App 扫码授权，凭证加密保存在 NAS 本地</p>
+      <p style="color:var(--muted);font-size:13px;margin-top:8px">用手机 115 App 扫码授权，凭证保存在 NAS 本地</p>
       <div><img id="qrImg" alt="二维码" class="hidden"></div>
       <div id="qrStatus" style="color:var(--muted);font-size:13px;min-height:20px"></div>
       <button class="btn primary" id="btnQr" style="margin-top:14px">获取登录二维码</button>
@@ -34,6 +34,14 @@
         <input type="search" id="cloudSearch" placeholder="搜索网盘文件…">
         <button class="btn" id="btnCloudSearch">搜索</button>
         <button class="btn" id="btnCloudRoot">返回根目录</button>
+        <select id="cloudSort">
+          <option value="time_desc">最新优先</option>
+          <option value="time_asc">最早优先</option>
+          <option value="name_asc">名称 A→Z</option>
+          <option value="name_desc">名称 Z→A</option>
+          <option value="size_desc">大小 大→小</option>
+          <option value="size_asc">大小 小→大</option>
+        </select>
         <span style="flex:1"></span>
         <select id="cloudTarget"></select>
         <button class="btn primary" id="btnEnqueue">加入下载 (<span id="selCount">0</span>)</button>
@@ -41,6 +49,7 @@
       <div class="crumbs" id="cloudCrumbs"></div>
       <div class="file-list" id="cloudList"></div>
     </div>
+    <div id="cloudError" class="empty hidden"></div>
   </section>
 
   <!-- 下载任务 -->

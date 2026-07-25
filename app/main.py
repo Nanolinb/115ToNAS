@@ -406,9 +406,9 @@ async def cloud_qr_status(uid: str):
 
 
 @app.get("/api/cloud/list")
-async def cloud_list(cid: str = "0", offset: int = 0):
+async def cloud_list(cid: str = "0", offset: int = 0, sort: str = "time_desc"):
     try:
-        return await cloud.list_files(cid, offset)
+        return await cloud.list_files(cid, offset, sort=sort)
     except CloudError as e:
         raise HTTPException(502, str(e))
 

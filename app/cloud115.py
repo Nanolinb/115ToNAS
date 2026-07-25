@@ -93,28 +93,44 @@ class Cloud115:
         pend = self._pending_qr.get(uid)
         if not pend:
             return {"status": "expired"}
+        if not pend.get("confirmed"):
+            try:
+                payload = await _req_json(
+                    "GET", f"{QR_API}/get/status/", retries=2,
+                    params={"uid": uid, "time": pend["time"], "sign": pend["sign"]})
+            except CloudError:
+                return {"status": "waiting"}  # 轮询遇网络抖动：保持等待，下轮再试
+            status = (payload.get("data") or {}).get("status")
+            if status == 2:
+                pend["confirmed"] = True  # 记住已确认，后续专注完成登录
+            elif status == 1:
+                return {"status": "scanned"}
+            elif status == 0:
+                return {"status": "waiting"}
+            else:
+                return {"status": "expired"}
+        # 已确认：完成登录。失败（网络瞬断等）下轮继续重试，不丢状态
         try:
-            payload = await _req_json(
-                "GET", f"{QR_API}/get/status/", retries=2,
-                params={"uid": uid, "time": pend["time"], "sign": pend["sign"]})
-        except CloudError:
-            return {"status": "waiting"}  # 轮询遇网络抖动：保持等待，下轮再试
-        status = (payload.get("data") or {}).get("status")
-        if status == 0:
-            return {"status": "waiting"}
-        if status == 1:
-            return {"status": "scanned"}
-        if status == 2:
             await self._complete_login(uid)
             return {"status": "done"}
-        return {"status": "expired"}
+        except CloudError:
+            pend["fail_count"] = pend.get("fail_count", 0) + 1
+            if pend["fail_count"] > 15:
+                self._pending_qr.pop(uid, None)
+                return {"status": "expired"}
+            return {"status": "scanned"}
 
     async def _complete_login(self, uid: str):
+        # 注意：app="web" 极易触发 115 的「IP登录异常」封禁，改用 alipaymini
+        # 通道（p115client 官方默认）；URL 末尾斜杠与请求体格式对齐官方实现
         payload = await _req_json(
-            "POST", f"{QR_API}/app/1.0/web/1.0/login/qrcode",
-            params={"account": uid, "app": "web"})
+            "POST", f"{QR_API}/app/1.0/alipaymini/1.0/login/qrcode/", retries=5,
+            data={"account": uid})
         if not payload.get("state"):
-            raise CloudError("扫码登录失败")
+            msg = (payload.get("error") or payload.get("msg")
+                   or payload.get("message") or "扫码登录失败")
+            print(f"[cloud115] login_qrcode 失败: {msg}")
+            raise CloudError(str(msg))
         cookie = (payload.get("data") or {}).get("cookie") or {}
         cookie_str = "; ".join(f"{k}={v}" for k, v in cookie.items())
         db.set_secret("115_cookie", cookie_str)  # 加密存储，不落明文
@@ -145,21 +161,44 @@ class Cloud115:
             "mtime": item.get("t", ""),
         }
 
-    async def list_files(self, cid: str = "0", offset: int = 0, limit: int = 200) -> dict:
+    SORT_MAP = {
+        "time_desc": ("user_ptime", 0), "time_asc": ("user_ptime", 1),
+        "name_asc": ("file_name", 1), "name_desc": ("file_name", 0),
+        "size_desc": ("file_size", 0), "size_asc": ("file_size", 1),
+    }
+
+    async def _fs_call(self, fn, retries: int = 3):
+        """p115client 同步调用：转线程 + 网络瞬断重试。"""
+        last: Exception | None = None
+        for attempt in range(retries):
+            try:
+                return await asyncio.to_thread(fn)
+            except CloudError:
+                raise
+            except Exception as e:
+                last = e
+                if attempt < retries - 1:
+                    await asyncio.sleep(1.0 * (attempt + 1))
+        raise CloudError(f"网络请求失败（已重试 {retries} 次）: {type(last).__name__}")
+
+    async def list_files(self, cid: str = "0", offset: int = 0, limit: int = 200,
+                         sort: str = "time_desc") -> dict:
         client = self._require_client()
+        order, asc = self.SORT_MAP.get(sort, self.SORT_MAP["time_desc"])
 
         def _call():
             resp = client.fs_files({
                 "cid": cid, "offset": offset, "limit": limit,
-                "show_dir": 1, "o": "user_ptime", "asc": 0,
+                "show_dir": 1, "o": order, "asc": asc,
             })
             if not resp.get("state"):
                 raise CloudError(str(resp.get("error") or "列出文件失败"))
             return resp
 
-        resp = await asyncio.to_thread(_call)
+        resp = await self._fs_call(_call)
         items = [self._normalize(it) for it in resp.get("data", [])]
-        items.sort(key=lambda x: (not x["is_dir"], x["name"].lower()))
+        # 目录永远排在文件前，组内保持服务端排序结果
+        items.sort(key=lambda x: not x["is_dir"])
         crumbs = [{"cid": str(p.get("cid", "0")), "name": p.get("name", "")}
                   for p in (resp.get("path") or [])]
         return {"items": items, "count": int(resp.get("count") or len(items)),
@@ -176,7 +215,7 @@ class Cloud115:
                 raise CloudError(str(resp.get("error") or "搜索失败"))
             return resp
 
-        resp = await asyncio.to_thread(_call)
+        resp = await self._fs_call(_call)
         return [self._normalize(it) for it in resp.get("data", [])]
 
     async def get_download_url(self, pickcode: str) -> str:
