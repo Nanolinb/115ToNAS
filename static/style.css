@@ -69,6 +69,12 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 @media (min-width: 900px) { .grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); } }
 .card { cursor: pointer; transition: transform .15s; }
 .card:hover { transform: translateY(-4px); }
+/* 电视遥控器方向键导航：聚焦态高亮 */
+.card:focus, .card:focus-visible {
+  outline: 3px solid var(--accent2); outline-offset: 3px;
+  border-radius: 10px; transform: translateY(-4px);
+}
+.btn:focus, .btn:focus-visible { outline: 2px solid var(--accent2); outline-offset: 2px; }
 .card .poster-wrap {
   position: relative; aspect-ratio: 2/3; border-radius: 10px; overflow: hidden;
   background: var(--card); border: 1px solid var(--border);
