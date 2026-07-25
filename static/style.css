@@ -93,6 +93,14 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .card .sub-title { color: var(--muted); font-size: 11px; margin-top: 2px; }
 .empty { color: var(--muted); text-align: center; padding: 80px 20px; font-size: 14px; }
 
+/* ---------- 封面挑选 ---------- */
+.poster-pick-grid { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); }
+.poster-pick-grid img {
+  width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 8px;
+  border: 1px solid var(--border); cursor: pointer; background: var(--card);
+}
+.poster-pick-grid img:hover { border-color: var(--accent2); }
+
 /* ---------- 弹窗 ---------- */
 .modal-mask {
   position: fixed; inset: 0; z-index: 100;
