@@ -1,5 +1,6 @@
 """115 Media Hub — FastAPI 主程序与全部 API 路由。"""
 import asyncio
+import json
 import mimetypes
 import re
 from contextlib import asynccontextmanager
@@ -229,7 +230,40 @@ async def media_detail(media_id: int):
     if not row:
         raise HTTPException(404, "not found")
     row["filename"] = Path(row["path"]).name
+    try:
+        row["subs"] = json.loads(row.get("subs") or "[]")
+    except ValueError:
+        row["subs"] = []
+    if not row["subs"] and row.get("sub_path"):
+        row["subs"] = [{"lang": "zh", "label": "中文字幕", "path": row["sub_path"]}]
+    for t in row["subs"]:
+        t.setdefault("label", t.get("lang", "字幕"))
     return row
+
+
+@app.get("/api/media/{media_id}/tracks")
+async def media_tracks(media_id: int):
+    """ffprobe 探测内嵌音轨/字幕数量（网页音轨菜单用）。"""
+    row = db.one("SELECT path FROM media WHERE id=?", (media_id,))
+    if not row:
+        raise HTTPException(404, "not found")
+    path = Path(row["path"])
+    if not path.exists():
+        raise HTTPException(404, "文件不存在")
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-show_entries", "stream=codec_type",
+            "-of", "csv=p=0", str(path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+    except FileNotFoundError:
+        return {"available": False, "audio": 0, "subtitle": 0}
+    except asyncio.TimeoutError:
+        return {"available": False, "audio": 0, "subtitle": 0}
+    types = out.decode(errors="ignore").split()
+    return {"available": True,
+            "audio": types.count("audio"),
+            "subtitle": types.count("subtitle")}
 
 
 @app.get("/api/media/{media_id}/tmdb_candidates")
@@ -258,11 +292,18 @@ async def media_subtitle(media_id: int):
         raise HTTPException(404, "not found")
     path = Path(row["path"])
     db.exe("UPDATE media SET sub_status='searching' WHERE id=?", (media_id,))
-    found = await subtitles.search_and_download(path, row["title"], row["year"])
-    db.exe("UPDATE media SET sub_status=?, has_sub=?, sub_path=? WHERE id=?",
-           ("ok" if found else "failed", 1 if found else 0,
-            str(found) if found else None, media_id))
-    return {"found": bool(found), "sub_path": str(found) if found else None}
+    tracks = subtitles.find_all_local_subs(path)
+    have = {t["lang"] for t in tracks}
+    for t in await subtitles.search_and_download(path, row["title"], row["year"]):
+        if t["lang"] not in have:
+            tracks.append(t)
+            have.add(t["lang"])
+    db.exe("""UPDATE media SET sub_status=?, has_sub=?, sub_path=?, subs=?
+              WHERE id=?""",
+           ("ok" if tracks else "failed", 1 if tracks else 0,
+            tracks[0]["path"] if tracks else None,
+            json.dumps(tracks, ensure_ascii=False), media_id))
+    return {"found": bool(tracks), "tracks": tracks}
 
 
 @app.delete("/api/media/{media_id}")
@@ -338,10 +379,23 @@ async def stream(media_id: int, request: Request):
 
 @app.get("/api/subtitle/{media_id}")
 async def subtitle(media_id: int):
-    row = db.one("SELECT sub_path FROM media WHERE id=?", (media_id,))
-    if not row or not row["sub_path"]:
+    return await subtitle_track(media_id, 0)
+
+
+@app.get("/api/subtitle/{media_id}/{idx}")
+async def subtitle_track(media_id: int, idx: int):
+    row = db.one("SELECT subs, sub_path FROM media WHERE id=?", (media_id,))
+    if not row:
         raise HTTPException(404, "无字幕")
-    p = Path(row["sub_path"])
+    try:
+        tracks = json.loads(row["subs"]) if row["subs"] else []
+    except ValueError:
+        tracks = []
+    if not tracks and row["sub_path"]:
+        tracks = [{"lang": "zh", "path": row["sub_path"]}]
+    if idx < 0 or idx >= len(tracks):
+        raise HTTPException(404, "无字幕")
+    p = Path(tracks[idx]["path"])
     if not p.exists():
         raise HTTPException(404, "字幕文件不存在")
     text = p.read_text(encoding="utf-8", errors="ignore")
@@ -470,7 +524,7 @@ async def task_control(task_id: str, action: str):
 # ---------------- 设置与目录管理 ----------------
 
 SETTING_KEYS = ("movie_dir", "tv_dir", "download_dir", "tmdb_key",
-                "assrt_token", "speed_limit", "auto_scan")
+                "assrt_token", "speed_limit", "auto_scan", "proxy_url")
 SECRET_SETTING_KEYS = ("tmdb_key", "assrt_token")
 MASK = "****"
 
@@ -487,7 +541,7 @@ async def get_settings():
         "tv_dir": str(MR / "tv"),
         "download_dir": str(MR / "downloads"),
         "tmdb_key": "", "assrt_token": "",
-        "speed_limit": "0", "auto_scan": "1",
+        "speed_limit": "0", "auto_scan": "1", "proxy_url": "",
     }
     out = {}
     for k, dft in defaults.items():
