@@ -88,6 +88,7 @@ async function openDetail(key) {
   // 管理端已登录时才显示维护按钮（电视上不会出现）
   const adminBtns = state.adminAuthed ? `
     ${e.kind === 'movie' ? `<button class="btn" data-subs="${e.id}">搜索字幕</button>` : ''}
+    <button class="btn" data-poster="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">更换封面</button>
     <button class="btn" data-rematch="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">重新匹配信息</button>` : '';
   let html = `
     <div class="detail-hero">${heroImg}<div class="fade"></div></div>
@@ -132,6 +133,39 @@ async function openDetail(key) {
     }));
   modal.querySelectorAll('[data-rematch]').forEach((b) =>
     b.addEventListener('click', () => openRematch(+b.dataset.rematch)));
+  modal.querySelectorAll('[data-poster]').forEach((b) =>
+    b.addEventListener('click', () => openPosterPicker(+b.dataset.poster)));
+  bindModalClosers(modal);
+}
+
+/* ---------- 更换封面（百度图片源，仅管理端会话可见） ---------- */
+
+async function openPosterPicker(mediaId) {
+  const kw = prompt('输入搜图关键词（留空用默认片名）:') || '';
+  let data;
+  try {
+    data = await api(`/api/media/${mediaId}/poster_candidates?q=${encodeURIComponent(kw)}`);
+  } catch (e) { toast(e.message); return; }
+  if (!data.items.length) { toast('百度图片没有找到候选封面'); return; }
+  const modal = $('#detailModal');
+  modal.innerHTML = `<div class="mhead"><h3>点击一张设为封面（来源：百度图片）</h3><button class="mclose" data-close="detailMask">✕</button></div>
+    <div class="mbody"><div class="poster-pick-grid">` +
+    data.items.map((u) => `<img src="${esc(u)}" data-url="${esc(u)}" loading="lazy" referrerpolicy="no-referrer">`).join('') +
+    `</div></div>`;
+  modal.querySelectorAll('img[data-url]').forEach((img) =>
+    img.addEventListener('click', async () => {
+      modal.querySelectorAll('img[data-url]').forEach((i) => i.style.opacity = .4);
+      img.style.opacity = 1; img.style.outline = '3px solid var(--accent2)';
+      try {
+        await api(`/api/media/${mediaId}/poster`, { method: 'POST', body: { url: img.dataset.url } });
+        toast('封面已更新');
+        $('#detailMask').classList.add('hidden');
+        loadLibrary();
+      } catch (e) {
+        toast(e.message);
+        modal.querySelectorAll('img[data-url]').forEach((i) => i.style.opacity = 1);
+      }
+    }));
   bindModalClosers(modal);
 }
 
