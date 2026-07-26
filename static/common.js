@@ -55,12 +55,16 @@ function bindModalClosers(root) {
 
 /* ---------- 播放器（观影端用） ---------- */
 
-// 浏览器（Chrome/Edge/Safari 的 HTML5 <video>）能解的音频编码；
-// ac3/eac3/dts/truehd 等只有 Safari 部分支持、Chrome 一律无声
+// 浏览器（Chrome/Edge/Safari 的 HTML5 <video>）能解的音频编码。
+// 注意：Google Chrome 自带商业解码器，AC3 能播（MKV 容器也行），
+// 但 EAC3(DD+ 5.1) 实测在 Mac Chrome 上 MKV/MP4 都无声——和 DTS/TrueHD 一样转码。
 const BROWSER_AUDIO_OK = new Set([
-  'aac', 'mp3', 'opus', 'vorbis', 'flac', 'alac', 'mp2',
+  'aac', 'ac3', 'mp3', 'opus', 'vorbis', 'flac', 'alac', 'mp2',
   'pcm_s16le', 'pcm_s24le', 'pcm_f32le', 'pcm_u8',
 ]);
+
+// Safari（含 iOS）：对流式 fMP4 转码流支持不可靠，走 IINA/原生切换路线
+const IS_SAFARI = /^((?!chrome|chromium|crios|fxios|android).)*safari/i.test(navigator.userAgent);
 
 async function playMedia(id) {
   const d = await api(`/api/media/${id}`);
@@ -97,10 +101,16 @@ async function playMedia(id) {
   const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
   const nativeOk = /\.(mp4|m4v|mov|webm)(\?|$)/i.test(d.filename || '');
 
-  // 只有 Safari 实现了原生 audioTracks 切换；其他浏览器靠服务端转码流换音轨
+  // 只有 Safari 实现了原生 audioTracks 切换；其他浏览器想换音轨靠转码流（手动）
   const nativeSwitch = !!video.audioTracks && tracks.length > 1;
-  // 需要转码：有解不了的音轨；或优选音轨不是第 0 条且不能原生切换（直放只会播第 0 条）
-  const useTranscode = badCodecs.length > 0 || (tracks.length > 1 && pref !== 0 && !nativeSwitch);
+  // 需要转码：以服务端判断为准（按实际会播放的优选轨判断：
+  // DTS/TrueHD 解不了；eac3 实测在 Mac Chrome 上无声，一律转 AAC）。
+  // 旧服务端没这个字段时用本地兜底。
+  // 不再为了"优选音轨"自动转码——能直放就直放，原生进度条体验最好；
+  // 想听非默认音轨，音轨菜单手动切（那时才走转码）
+  const useTranscode = info.needs_transcode !== undefined
+    ? !!info.needs_transcode
+    : badCodecs.length > 0;
   setupAudioMenu(video, id, info, useTranscode, nativeSwitch);
 
   // Mac 上：容器不支持 或 音频编码浏览器解不了 → 提供「用 IINA 打开」（直接拉起）
@@ -118,6 +128,10 @@ async function playMedia(id) {
   if (badCodecs.length) {
     toast(`音频编码 ${[...new Set(badCodecs)].join(' / ')} 浏览器无法解码 → ` +
       '已实时转码 AAC 播放（拖动进度条会重新起流）；要原始音轨可用 IINA / 电视播放器', 5000);
+  }
+  // Safari 对流式转码 fMP4 支持不可靠：直接指路 IINA（Mac）或 Chrome
+  if (IS_SAFARI && (badCodecs.length || !nativeOk)) {
+    toast('Safari 无法在线播放此格式 → 请点下方「用 IINA 打开」，或改用 Chrome', 6000);
   }
 
   // 浏览器解不了的音轨 / 优选音轨非第 0 条 → 服务端实时转 AAC（视频流原样拷贝）；
@@ -157,11 +171,13 @@ function setupSeekBar(video, id, duration) {
   const bar = $('#seekBar'), fill = $('#seekFill');
   if (!bar) return;
   let reloading = false;
-  // 后端探测的全片时长：进度条立即有总长，不等 metadata
+  // 后端 ffprobe 时长为准：有些 MKV 头部时长是坏的（Slam Dunk 标 1 秒），
+  // Chrome 只能按已收到数据估时长（渐进式），绝不能让它覆盖后端的准确值
   if (duration > 0) video.dataset.total = String(duration);
 
   const vis = () => {
-    const on = video.dataset.transcode === '1';
+    // Safari 转码流本身播不了，自绘条点了也没用，不展示
+    const on = video.dataset.transcode === '1' && !IS_SAFARI;
     bar.classList.toggle('hidden', !on);
     video.classList.toggle('transcode', on);  // 隐藏 Chrome 原生时间轴
     updateSeekFill(video);
@@ -170,6 +186,7 @@ function setupSeekBar(video, id, duration) {
   video._seekVis = vis;  // 音轨菜单切轨（转码开启）后刷新
 
   video.ondurationchange = () => {
+    if (parseFloat(video.dataset.total || '0') > 0) return;  // 已有后端准确时长
     const d = video.duration;
     if (isFinite(d) && d > 0)
       video.dataset.total = String(parseFloat(video.dataset.base || '0') + d);
@@ -182,12 +199,7 @@ function setupSeekBar(video, id, duration) {
         return true;
     return false;
   };
-  const startStreamAt = (abs) => {
-    const t = Math.max(0, Math.floor(abs));
-    video.dataset.base = String(t);
-    video.src = `/api/stream/${id}?audio=aac&a=${video.dataset.a}&t=${t}`;
-    video.play().catch(() => {});
-  };
+  const startStreamAt = (abs) => { transcodeAt(video, id, abs); };
 
   const track = bar.querySelector('.seek-track');
   bar.onclick = (e) => {
@@ -205,7 +217,7 @@ function setupSeekBar(video, id, duration) {
 
   // 键盘左右键 / Safari 原生条拖出缓冲区时的兜底
   video.onseeking = () => {
-    if (video.dataset.transcode !== '1' || reloading) return;
+    if (video.dataset.transcode !== '1' || reloading || video._aligning) return;
     const abs = parseFloat(video.dataset.base || '0') + video.currentTime;
     if (inBuffer(abs)) return;
     reloading = true;
@@ -228,6 +240,47 @@ function updateSeekFill(video) {
   if (time) time.textContent = `${fmtTime(abs)} / ${fmtTime(total)}`;
 }
 
+// 转码流从 t 秒重起后时间轴从 0 开始，字幕却是原片绝对时间：
+// base 一变就刷新字幕轨地址，让服务端把 cue 整体前移 base 秒
+function syncSubOffset(video, id) {
+  const base = parseFloat(video.dataset.base || '0');
+  video.querySelectorAll('track').forEach((tr, i) => {
+    tr.src = `/api/subtitle/${id}/${i}` + (base > 0 ? `?offset=${base}` : '');
+  });
+}
+
+// 转码起流统一入口：视频流是整包拷贝，-ss 只能落在关键帧上。
+// 先问服务端 `-ss t` 的实际落点 start 作为 base（服务端起流时会对同一个 t
+// 再测一次落点并从该点起音频，保证音画同点）；t→start 的前摇在加载后跳掉。
+// 注意 URL 里传原始 t 而不是 start：MKV 上 -ss 恰好落在关键帧时刻会多退
+// 一个 GOP，传 start 反而会让服务端落点再前移，base 就对不上了。
+async function transcodeAt(video, id, abs) {
+  const t = Math.max(0, Math.floor(abs));
+  let start = t;
+  try {
+    const r = await api(`/api/stream-prep/${id}?t=${t}`);
+    if (r && r.start >= 0) start = r.start;
+  } catch (e) {}
+  video.dataset.transcode = '1';
+  video.dataset.base = String(start);
+  const skip = t - start;
+  if (skip > 0.25) {
+    video._aligning = true;
+    video.onloadedmetadata = () => {
+      const done = () => { video._aligning = false; };
+      video.addEventListener('seeked', done, { once: true });
+      setTimeout(done, 3000);
+      try { video.currentTime = skip; } catch (e) { done(); }
+    };
+  } else {
+    video.onloadedmetadata = null;
+  }
+  video.src = `/api/stream/${id}?audio=aac&a=${video.dataset.a}&t=${t}`;
+  video.play().catch(() => {});
+  syncSubOffset(video, id);
+  if (video._seekVis) video._seekVis();
+}
+
 /* ---------- 续播（记住上次播放位置） ---------- */
 
 function fmtTime(s) {
@@ -239,11 +292,14 @@ function fmtTime(s) {
 
 // 进度存浏览器 localStorage（mh_pos_<id>）：每台设备各记各的，30 秒以内不记，快播完自动清
 function savePos(video, id) {
-  const t = video.currentTime || 0, d = video.duration || 0;
+  const t = video.currentTime || 0;
+  // 时长优先用后端准确值（坏头 MKV 的 video.duration 不可信）；换算成绝对位置
+  const d = parseFloat(video.dataset.total || '0') || video.duration || 0;
+  const abs = parseFloat(video.dataset.base || '0') + t;
   const key = `mh_pos_${id}`;
   try {
-    if (d && d - t <= 60) localStorage.removeItem(key);
-    else if (t > 30) localStorage.setItem(key, String(Math.floor(t)));
+    if (d && d - abs <= 60) localStorage.removeItem(key);
+    else if (abs > 30) localStorage.setItem(key, String(Math.floor(abs)));
   } catch (e) {}
 }
 
@@ -266,23 +322,30 @@ function setupResume(video, id) {
   if (saved <= 30) { promptEl.classList.add('hidden'); return; }
   $('#resumeText').textContent = `上次看到 ${fmtTime(saved)}，是否从上次的位置开始？`;
   promptEl.classList.remove('hidden');
+  // 8 秒无操作自动收起（自动播放会立刻触发 play 事件，不能靠 play 收）
+  const hideTimer = setTimeout(() => promptEl.classList.add('hidden'), 8000);
   $('#btnResumeYes').onclick = () => {
+    clearTimeout(hideTimer);
     promptEl.classList.add('hidden');
     if (video.dataset.transcode === '1') {
-      // 转码流不能按字节 seek：按时间点重新起流
-      video.dataset.base = String(saved);
-      video.src = `/api/stream/${id}?audio=aac&a=${video.dataset.a}&t=${saved}`;
-      video.play().catch(() => {});
+      // 转码流不能按字节 seek：关键帧对齐后重新起流
+      transcodeAt(video, id, saved);
     } else {
       video.currentTime = saved;
       video.play().catch(() => {});
     }
   };
   $('#btnResumeNo').onclick = () => {
+    clearTimeout(hideTimer);
     promptEl.classList.add('hidden');
     try { localStorage.removeItem(`mh_pos_${id}`); } catch (e) {}
     video.currentTime = 0;
     video.play().catch(() => {});
+  };
+  // ×：只关掉提示条，不动播放进度（记录保留，下次打开还会问）
+  $('#btnResumeClose').onclick = () => {
+    clearTimeout(hideTimer);
+    promptEl.classList.add('hidden');
   };
 }
 
@@ -323,7 +386,7 @@ function closePlayer() {
   const v = $('#playerVideo');
   if (v.dataset.mid) savePos(v, +v.dataset.mid);
   v.pause(); v.removeAttribute('src'); v.load();
-  v.ontimeupdate = null; v.onseeking = null;
+  v.ontimeupdate = null; v.onseeking = null; v.onloadedmetadata = null; v._aligning = false;
   const panel = $('#playerPlaylist');
   if (panel) panel.classList.add('hidden');
   const rp = $('#resumePrompt');
@@ -374,14 +437,9 @@ function setupAudioMenu(video, id, info, useTranscode, nativeSwitch) {
       sel.value = String(video.dataset.a || info.preferred_audio || 0);
       sel.onchange = () => {
         video.dataset.a = sel.value;
-        video.dataset.transcode = '1';
-        // 进度换算成绝对秒（重起流后 currentTime 从 0 起算）
-        const t = Math.floor(parseFloat(video.dataset.base || '0') + video.currentTime);
-        video.dataset.base = String(t);
-        video.src = `/api/stream/${id}?audio=aac&a=${sel.value}` +
-          `&t=${t}`;
-        video.play().catch(() => {});
-        if (video._seekVis) video._seekVis();
+        // 进度换算成绝对秒，关键帧对齐后重新起流
+        const abs = parseFloat(video.dataset.base || '0') + video.currentTime;
+        transcodeAt(video, id, abs);
       };
       sel.title = '切换音轨（服务端转码，从当前进度继续）';
     }

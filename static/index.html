@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>115 影库</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=1.18.0">
 </head>
 <body>
 
@@ -57,6 +57,7 @@
     <video id="playerVideo" controls playsinline></video>
     <div id="seekBar" class="seek-bar hidden"><div class="seek-track"><div id="seekFill" class="seek-fill"></div></div><span id="seekTime" class="seek-time"></span></div>
     <div id="resumePrompt" class="hidden resume-prompt">
+      <button class="resume-close" id="btnResumeClose" title="关闭">×</button>
       <span id="resumeText"></span>
       <button class="btn small primary" id="btnResumeYes">继续播放</button>
       <button class="btn small" id="btnResumeNo">从头开始</button>
@@ -76,7 +77,8 @@
   </div>
 </div>
 
-<script src="/static/common.js"></script>
-<script src="/static/viewer.js"></script>
+<script src="/static/common.js?v=1.18.0"></script>
+<script src="/static/viewer.js?v=1.18.0"></script>
+<div class="ver-tag">v1.18.0</div>
 </body>
 </html>

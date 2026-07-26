@@ -18,6 +18,8 @@ LANG_META = {
 }
 # 在线搜刮的目标语言与文件后缀
 TRACK_TARGETS = (("zh", ".zh"), ("en", ".en"), ("zh-en", ".zh-en"))
+# 轨道展示/默认轨排序：中文优先
+LANG_ORDER = {"zh": 0, "zh-en": 1, "cht": 2, "en": 3}
 
 
 def _detect_lang(infix: str) -> str:
@@ -90,10 +92,11 @@ def find_all_local_subs(video_path: Path) -> list:
                         "_dlen": len(fstem) - len(stem) if exact else len(fstem)})
     except OSError:
         pass
-    # 同一语言可能有多条候选：严格同名 > 模糊匹配 > 与视频名最接近（中缀短）> 可播格式
+    # 同一语言可能有多条候选：中文优先 > 严格同名 > 模糊匹配 > 与视频名最接近 > 可播格式
     fmt_rank = {".vtt": 0, ".srt": 1}
     seen, uniq = set(), []
-    for t in sorted(out, key=lambda t: (t["lang"], t["_rank"], t["_dlen"],
+    for t in sorted(out, key=lambda t: (LANG_ORDER.get(t["lang"], 9), t["_rank"],
+                                        t["_dlen"],
                                         fmt_rank.get(Path(t["path"]).suffix.lower(), 2))):
         if t["lang"] not in seen:
             seen.add(t["lang"])

@@ -44,7 +44,8 @@ app = FastAPI(title="115 Media Hub", lifespan=lifespan)
 
 PUBLIC_PREFIXES = ("/api/auth/",)
 VIEWER_GET_EXACT = ("/api/library",)
-VIEWER_PREFIXES = ("/api/poster/", "/api/stream/", "/api/subtitle/")
+VIEWER_PREFIXES = ("/api/poster/", "/api/stream/", "/api/subtitle/",
+                   "/api/stream-prep/")
 _VIEWER_MEDIA_RE = re.compile(r"^/api/media/\d+$")
 _VIEWER_PLAYLINK_RE = re.compile(r"^/api/media/\d+/playlink$")
 _VIEWER_TRACKS_RE = re.compile(r"^/api/media/\d+/tracks$")
@@ -86,14 +87,16 @@ async def security_headers(request: Request, call_next):
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
-    """观影端：海报墙 + 播放，默认免密。"""
-    return FileResponse(STATIC_DIR / "index.html")
+    """观影端：海报墙 + 播放，默认免密。HTML 不缓存（静态资源带版本号）。"""
+    return FileResponse(STATIC_DIR / "index.html",
+                        headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/admin", response_class=HTMLResponse)
 async def admin_page():
     """管理端：115登录/下载/设置，独立登录通道。"""
-    return FileResponse(STATIC_DIR / "admin.html")
+    return FileResponse(STATIC_DIR / "admin.html",
+                        headers={"Cache-Control": "no-cache"})
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -303,13 +306,31 @@ async def media_detail(media_id: int):
         raise HTTPException(404, "not found")
     row["filename"] = Path(row["path"]).name
     try:
-        row["subs"] = json.loads(row.get("subs") or "[]")
+        stored = json.loads(row.get("subs") or "[]")
     except ValueError:
-        row["subs"] = []
-    if not row["subs"] and row.get("sub_path"):
-        row["subs"] = [{"lang": "zh", "label": "中文字幕", "path": row["sub_path"]}]
-    for t in row["subs"]:
+        stored = []
+    if not stored and row.get("sub_path"):
+        stored = [{"lang": "zh", "label": "中文字幕", "path": row["sub_path"]}]
+    subs = stored
+    vp = Path(row["path"])
+    if vp.exists():
+        # 播放时实时重扫同目录字幕：扫描后才放进文件夹的字幕（模糊命名也算）
+        # 也能自动挂载、在播放器里切换，不必手动重扫
+        subs = subtitles.find_all_local_subs(vp)
+        known = {t["path"] for t in subs}
+        for t in stored:  # 在线下载等历史轨道：文件还在就保留
+            if t.get("path") not in known and Path(t.get("path") or "").exists():
+                subs.append(t)
+                known.add(t["path"])
+        subs.sort(key=lambda t: subtitles.LANG_ORDER.get(t.get("lang"), 9))
+        key = [(t.get("lang"), t.get("path")) for t in subs]
+        if key != [(t.get("lang"), t.get("path")) for t in stored]:
+            db.exe("UPDATE media SET has_sub=?, sub_path=?, subs=? WHERE id=?",
+                   (1 if subs else 0, subs[0]["path"] if subs else None,
+                    json.dumps(subs, ensure_ascii=False), media_id))
+    for t in subs:
         t.setdefault("label", t.get("lang", "字幕"))
+    row["subs"] = subs
     return row
 
 
@@ -326,7 +347,7 @@ async def media_tracks(media_id: int):
     if data is None:
         return {"available": False, "audio": 0, "subtitle": 0,
                 "audio_codecs": [], "audio_tracks": [], "preferred_audio": 0,
-                "duration": 0}
+                "duration": 0, "needs_transcode": False}
     try:
         duration = float((data.get("format") or {}).get("duration") or 0)
     except (TypeError, ValueError):
@@ -342,11 +363,30 @@ async def media_tracks(media_id: int):
                                  "codec": s.get("codec_name") or ""})
         elif s.get("codec_type") == "subtitle":
             sub_n += 1
+    pref = _preferred_audio(audio_tracks)
     return {"available": True, "audio": len(audio_codecs),
             "subtitle": sub_n, "audio_codecs": audio_codecs,
             "audio_tracks": audio_tracks,
-            "preferred_audio": _preferred_audio(audio_tracks),
-            "duration": duration}
+            "preferred_audio": pref,
+            "duration": duration,
+            "needs_transcode": _needs_transcode(path, audio_tracks, pref)}
+
+
+# 浏览器能直解的音频编码。Chrome/Edge 连 MKV 容器里的 ac3 也能解；
+# 但 eac3(DDP/DD+ 5.1) 实测在 Mac Chrome 上 MKV/MP4 都无声，一律转 AAC
+BROWSER_AUDIO_CODECS = {
+    "aac", "ac3", "mp3", "opus", "vorbis", "flac", "alac", "mp2",
+    "pcm_s16le", "pcm_s24le", "pcm_f32le", "pcm_u8",
+}
+
+
+def _needs_transcode(path: Path, audio_tracks: list, preferred: int) -> bool:
+    """按实际会播放的优选音轨判断是否要服务端转 AAC。"""
+    if not audio_tracks:
+        return False
+    codec = (audio_tracks[min(preferred, len(audio_tracks) - 1)]
+             .get("codec") or "").lower()
+    return codec not in BROWSER_AUDIO_CODECS
 
 
 async def _probe_streams(path: Path):
@@ -633,6 +673,52 @@ async def stream(media_id: int, request: Request):
                              media_type=mime)
 
 
+async def _seek_landing(path: Path, t: float) -> float:
+    """实测输入寻址 `-ss t` 时视频流的真实落点（copyts 保留绝对时间戳）。
+    MKV 的关键帧寻址很怪：-ss 恰好落在关键帧时刻附近会多退一个 GOP
+    （实测 -ss 598.648 落 596.596），所以不能靠"关键帧表 + epsilon"推断，
+    必须实测。只拷 1 帧不解码，很快；失败时原样返回 t。"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-v", "error", "-ss", f"{t:.3f}", "-copyts",
+            "-i", str(path), "-map", "0:v:0", "-c:v", "copy",
+            "-frames:v", "1", "-f", "framemd5", "-",
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
+        tb = 1000.0
+        for line in out.decode(errors="ignore").splitlines():
+            if line.startswith("#tb 0:"):
+                # 形如 "#tb 0: 1/1000"（注意是空格分隔）
+                m = re.search(r"1/(\d+)", line)
+                if m:
+                    tb = float(m.group(1))
+            elif line and not line.startswith("#"):
+                parts = line.split(",")
+                if len(parts) >= 3:
+                    try:
+                        return max(0.0, int(parts[2].strip()) / tb)
+                    except ValueError:
+                        pass
+                break
+    except (OSError, asyncio.TimeoutError):
+        pass
+    return t
+
+
+@app.get("/api/stream-prep/{media_id}")
+async def stream_prep(media_id: int, t: float = 0):
+    """转码起流前的关键帧对齐：返回 `-ss t` 时视频流的实际落点（≤ t）。"""
+    row = db.one("SELECT path FROM media WHERE id=?", (media_id,))
+    if not row:
+        raise HTTPException(404, "not found")
+    path = Path(row["path"])
+    if not path.exists():
+        raise HTTPException(404, "文件不存在")
+    t = min(max(0.0, t or 0.0), 24 * 3600)
+    start = await _seek_landing(path, t) if t > 0 else 0.0
+    return {"start": round(start, 3)}
+
+
 async def _stream_aac(path: Path, request: Request):
     """浏览器解不了的音轨（AC3/EAC3/DTS/TrueHD）→ ffmpeg 实时转 AAC，
     视频流原样拷贝（不重编码，CPU 占用低）。转码流无法按字节 seek，
@@ -641,28 +727,45 @@ async def _stream_aac(path: Path, request: Request):
         t = max(0.0, float(request.query_params.get("t", 0) or 0))
     except ValueError:
         t = 0.0
+    data = await _probe_streams(path) or {}
+    vcodec = next((s.get("codec_name") for s in data.get("streams", [])
+                   if s.get("codec_type") == "video"), "")
     # 音轨选择：?a=N 指定第 N 条音轨；缺省按 中→英→日 优选（多音轨影片自动说中文/英文）
     try:
         a = int(request.query_params.get("a", "") or -1)
     except ValueError:
         a = -1
     if a < 0:
-        data = await _probe_streams(path) or {}
         tracks = [{"i": n,
                    "lang": (s.get("tags") or {}).get("language", ""),
                    "title": (s.get("tags") or {}).get("title", "")}
                   for n, s in enumerate(x for x in data.get("streams", [])
                                         if x.get("codec_type") == "audio")]
         a = _preferred_audio(tracks)
+    # 视频流是整包拷贝，-ss 输入寻址只能落关键帧；音频转码则是精确落点。
+    # muxer 按最早 pts 归零时间轴，两路 -ss 不同就会音画错位（不同步的根因）。
+    # 做法：先实测视频真实落点 V；视频输入按 t 寻址（落 V，首帧 pts=V-t），
+    # 音频走第二输入精确从 V 起、解码后用 asetpts 平移 (V-t) 与视频首帧对齐
+    # （不能用 -itsoffset：它会让 accurate seek 的丢弃边界算错）。
+    v_start = await _seek_landing(path, t) if t else 0.0
     cmd = ["ffmpeg", "-v", "error"]
     if t:
         cmd += ["-ss", f"{t:.3f}"]
-    cmd += ["-i", str(path),
-            "-map", "0:v:0", "-c:v", "copy",
-            "-map", f"0:a:{a}", "-c:a", "aac", "-b:a", "192k",
-            # 不用 empty_moov：让 moov 带上整部影片时长，浏览器进度条才可拖
-            # （empty_moov 时长为 0，Chrome 当直播流处理，进度条锁死）
-            "-movflags", "frag_keyframe+default_base_moof",
+    cmd += ["-i", str(path)]
+    if t:
+        cmd += ["-ss", f"{v_start:.3f}", "-i", str(path)]
+    cmd += ["-map", "0:v:0", "-c:v", "copy"]
+    if vcodec == "hevc":
+        cmd += ["-tag:v", "hvc1"]  # 帮 Mac/浏览器识别走硬解
+    cmd += ["-map", f"{1 if t else 0}:a:{a}"]
+    if t and v_start < t - 0.001:
+        cmd += ["-af", f"asetpts=PTS-{t - v_start:.3f}/TB"]
+    cmd += ["-c:a", "aac", "-b:a", "192k",
+            # 源文件章节信息会变成多余的 text/data 轨，去掉
+            "-map_chapters", "-1"]
+    # 不用 empty_moov：让 moov 带上整部影片时长，浏览器进度条才可拖
+    # （empty_moov 时长为 0，Chrome 当直播流处理，进度条锁死）
+    cmd += ["-movflags", "frag_keyframe+default_base_moof",
             "-f", "mp4", "pipe:1"]
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
@@ -684,13 +787,72 @@ async def _stream_aac(path: Path, request: Request):
     return StreamingResponse(gen(), media_type="video/mp4")
 
 
+_VTT_TS_RE = re.compile(r"^(?:(\d+):)?(\d{1,2}):(\d{2})\.(\d{3})$")
+_ASS_TAG_RE = re.compile(r"\{[^}]*\}")
+
+
+def _strip_ass_tags(text: str) -> str:
+    """清掉字幕正文里的 ASS 覆写标签（{\\fscx70\\1c&H...&} {\\r} 等），
+    \\N/\\n 是 ASS 硬换行、\\h 是硬空格，转成 VTT 认识的形态。"""
+    text = _ASS_TAG_RE.sub("", text)
+    return (text.replace("\\N", "\n").replace("\\n", "\n")
+            .replace("\\h", " "))
+
+
+def _vtt_ts_to_sec(s: str):
+    m = _VTT_TS_RE.match(s)
+    if not m:
+        return None
+    return (int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60
+            + int(m.group(3)) + int(m.group(4)) / 1000)
+
+
+def _sec_to_vtt_ts(sec: float) -> str:
+    sec = max(0.0, sec)
+    h = int(sec // 3600)
+    m = int((sec % 3600) // 60)
+    return f"{h:02d}:{m:02d}:{sec - h * 3600 - m * 60:06.3f}"
+
+
+def _shift_vtt(text: str, offset: float) -> str:
+    """转码流从 offset 秒重起时时间轴从 0 开始，而字幕是绝对时间：
+    把所有 cue 前移 offset 秒；整体落在 offset 之前的 cue 丢弃。"""
+    if offset <= 0:
+        return text
+    out, lines = [], text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+        m = re.match(r"^(\S+) --> (\S+)(.*)$", line)
+        if m:
+            st, en = _vtt_ts_to_sec(m.group(1)), _vtt_ts_to_sec(m.group(2))
+            if st is not None and en is not None:
+                j = i + 1
+                body = []
+                while j < n and lines[j].strip():
+                    body.append(lines[j])
+                    j += 1
+                if en - offset > 0:
+                    out.append(f"{_sec_to_vtt_ts(st - offset)} --> "
+                               f"{_sec_to_vtt_ts(en - offset)}{m.group(3)}")
+                    out.extend(body)
+                elif out and out[-1].strip() and " --> " not in out[-1] \
+                        and out[-1].strip() != "WEBVTT":
+                    out.pop()  # 整条 cue 丢弃时，上一行的 cue 编号也一起去掉
+                i = j
+                continue
+        out.append(line)
+        i += 1
+    return "\n".join(out)
+
+
 @app.get("/api/subtitle/{media_id}")
-async def subtitle(media_id: int):
-    return await subtitle_track(media_id, 0)
+async def subtitle(media_id: int, offset: float = 0):
+    return await subtitle_track(media_id, 0, offset)
 
 
 @app.get("/api/subtitle/{media_id}/{idx}")
-async def subtitle_track(media_id: int, idx: int):
+async def subtitle_track(media_id: int, idx: int, offset: float = 0):
     row = db.one("SELECT subs, sub_path FROM media WHERE id=?", (media_id,))
     if not row:
         raise HTTPException(404, "无字幕")
@@ -704,12 +866,25 @@ async def subtitle_track(media_id: int, idx: int):
         raise HTTPException(404, "无字幕")
     p = Path(tracks[idx]["path"])
     if not p.exists():
-        raise HTTPException(404, "字幕文件不存在")
+        # 文件被移动过（subs JSON 里存的是旧绝对路径）：
+        # 用视频所在目录 + 字幕文件名兜底，多数移动都能自愈
+        vrow = db.one("SELECT path FROM media WHERE id=?", (media_id,))
+        if vrow:
+            alt = Path(vrow["path"]).parent / p.name
+            if alt.exists():
+                p = alt
+        if not p.exists():
+            raise HTTPException(404, "字幕文件不存在")
+    offset = min(max(0.0, offset or 0.0), 24 * 3600)
     text = p.read_text(encoding="utf-8", errors="ignore")
     if p.suffix.lower() == ".srt":
         vtt = "WEBVTT\n\n" + re.sub(r"(\d{2}:\d{2}:\d{2}),(\d{3})",
                                     r"\1.\2", text)
-        return Response(vtt, media_type="text/vtt; charset=utf-8")
+        return Response(_shift_vtt(_strip_ass_tags(vtt), offset),
+                        media_type="text/vtt; charset=utf-8")
+    if p.suffix.lower() == ".vtt":
+        return Response(_shift_vtt(_strip_ass_tags(text), offset),
+                        media_type="text/vtt; charset=utf-8")
     # ass/ssa 浏览器无法渲染，原样返回供下载
     return Response(text, media_type="text/plain; charset=utf-8")
 
@@ -1025,9 +1200,15 @@ def _sync_db_path(src: Path, dst: Path | None, is_dir: bool):
         for table in ("media", "downloads"):
             db.exe(f"UPDATE {table} SET path = ? || '/' || substr(path, ?) WHERE path LIKE ?",
                    (str(dst), len(str(src)) + 2, str(src) + "/%"))
+        # subs JSON 数组与 sub_path 里存的是字幕绝对路径，同样按前缀平移
+        db.exe("UPDATE media SET subs = REPLACE(subs, ?, ?) WHERE subs LIKE ?",
+               (str(src) + "/", str(dst) + "/", "%" + str(src) + "/%"))
+        db.exe("UPDATE media SET sub_path = ? || '/' || substr(sub_path, ?) WHERE sub_path LIKE ?",
+               (str(dst), len(str(src)) + 2, str(src) + "/%"))
     else:
         db.exe("UPDATE media SET path=? WHERE path=?", (str(dst), str(src)))
         db.exe("UPDATE downloads SET path=? WHERE path=?", (str(dst), str(src)))
+        db.exe("UPDATE media SET sub_path=? WHERE sub_path=?", (str(dst), str(src)))
 
 
 def _check_not_root(p: Path):
