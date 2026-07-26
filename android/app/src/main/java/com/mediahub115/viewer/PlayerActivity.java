@@ -1,8 +1,12 @@
 package com.mediahub115.viewer;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.SharedPreferences;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.view.KeyEvent;
 import android.view.WindowManager;
 import android.widget.Toast;
@@ -24,6 +28,8 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * 内嵌播放器：ExoPlayer 硬件解码（电视/投影 MediaCodec 可解 HEVC，
@@ -33,9 +39,13 @@ import java.util.List;
  * - 音轨菜单：遥控器 MENU 键；字幕菜单：CAPTIONS 键
  * - 音轨解码失败（无 DTS/TrueHD 授权）→ 自动回落服务端 ?audio=aac 转码流
  * - 遥控器左右键快退/快进 10 秒
+ * - 续播：每 5 秒记录进度到 SharedPreferences，再打开时弹窗问「继续播放/从头开始」
  */
 @OptIn(markerClass = UnstableApi.class)
 public class PlayerActivity extends Activity {
+
+    private static final String PREFS = "resume";
+    private static final Pattern MEDIA_ID = Pattern.compile("/api/stream/(\\d+)");
 
     private ExoPlayer player;
     private PlayerView view;
@@ -43,6 +53,15 @@ public class PlayerActivity extends Activity {
     private String subsJson;
     private boolean aacFallback;  // 已切到服务端 AAC 转码流
     private boolean trackChecked; // 首次 onTracksChanged 已检测
+    private String posKey;        // 续播存档键（按影片 id，playlink 令牌每次变，不能按 URL）
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Runnable saver = new Runnable() {
+        @Override
+        public void run() {
+            savePos();
+            handler.postDelayed(this, 5000);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -95,7 +114,60 @@ public class PlayerActivity extends Activity {
                 }
             }
         });
-        load(url, 0);
+
+        Matcher m = MEDIA_ID.matcher(url == null ? "" : url);
+        posKey = m.find() ? "pos_" + m.group(1) : null;
+        handler.postDelayed(saver, 5000);
+
+        // 上次看到 30 秒以上 → 弹窗问「继续播放 / 从头开始」（与网页版同一规则）
+        long saved = posKey == null ? 0
+                : getSharedPreferences(PREFS, MODE_PRIVATE).getLong(posKey, 0);
+        if (saved > 30_000) {
+            askResume(saved);
+        } else {
+            load(url, 0);
+        }
+    }
+
+    private void askResume(long savedMs) {
+        new AlertDialog.Builder(this)
+                .setTitle("续播")
+                .setMessage("上次看到 " + fmt(savedMs) + "，是否从上次的位置开始？")
+                .setPositiveButton("继续播放", (d, w) -> load(url, savedMs))
+                .setNegativeButton("从头开始", (d, w) -> {
+                    if (posKey != null) {
+                        getSharedPreferences(PREFS, MODE_PRIVATE)
+                                .edit().remove(posKey).apply();
+                    }
+                    load(url, 0);
+                })
+                .setCancelable(false)
+                .show();
+    }
+
+    private static String fmt(long ms) {
+        long s = Math.max(0, ms / 1000);
+        long h = s / 3600, m = (s % 3600) / 60, ss = s % 60;
+        return h > 0 ? String.format("%d:%02d:%02d", h, m, ss)
+                     : String.format("%d:%02d", m, ss);
+    }
+
+    /** 30 秒以内不记；快播完（剩不到 60 秒）自动清档，下次从头播。 */
+    private void savePos() {
+        if (player == null || posKey == null) {
+            return;
+        }
+        long pos = player.getCurrentPosition();
+        long dur = player.getDuration();
+        SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
+        if (dur > 0 && dur - pos <= 60_000) {
+            e.remove(posKey);
+        } else if (pos > 30_000) {
+            e.putLong(posKey, pos);
+        } else {
+            return;
+        }
+        e.apply();
     }
 
     private void load(String u, long startMs) {
@@ -158,6 +230,7 @@ public class PlayerActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        savePos();
         if (player != null) {
             player.pause();
         }
@@ -165,6 +238,7 @@ public class PlayerActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        handler.removeCallbacks(saver);
         if (player != null) {
             player.release();
             player = null;
