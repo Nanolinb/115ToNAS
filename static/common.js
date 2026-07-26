@@ -129,12 +129,36 @@ async function playMedia(id) {
     catch (e) { prompt('复制此直链:', playUrl); }
   };
   $('#btnDownloadFile').onclick = () => { window.open(playUrl, '_blank'); };
+  setupEpisodeList(id);
   video.play().catch(() => {});
+}
+
+/* ---------- 播放列表（当前剧集选集） ---------- */
+
+// 数据由观影端 viewer.js 的 window.episodesOf(id) 提供；电影/单集时按钮隐藏
+function setupEpisodeList(currentId) {
+  const btn = $('#btnPlaylist'), panel = $('#playerPlaylist');
+  if (!btn || !panel) return;
+  const eps = (typeof window.episodesOf === 'function' && window.episodesOf(currentId)) || [];
+  if (eps.length < 2) {
+    btn.classList.add('hidden'); panel.classList.add('hidden');
+    return;
+  }
+  btn.classList.remove('hidden');
+  panel.innerHTML = eps.map((e) => {
+    const tag = `S${String(e.season).padStart(2, '0')}E${String(e.episode || '?').padStart(2, '0')}`;
+    return `<div class="pl-row${e.id === currentId ? ' on' : ''}" data-ep="${e.id}">` +
+      `<span class="pl-ep">${tag}</span><span class="pl-name">${esc(e.name)}</span></div>`;
+  }).join('');
+  panel.querySelectorAll('[data-ep]').forEach((r) =>
+    r.addEventListener('click', () => playMedia(+r.dataset.ep)));
 }
 
 function closePlayer() {
   const v = $('#playerVideo');
   v.pause(); v.removeAttribute('src'); v.load();
+  const panel = $('#playerPlaylist');
+  if (panel) panel.classList.add('hidden');
   $('#playerMask').classList.add('hidden');
 }
 

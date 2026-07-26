@@ -282,6 +282,13 @@ async function openRematch(mediaId) {
 
 /* ---------- 启动 ---------- */
 
+// 播放器选集列表的数据源：当前剧集的全部集（供 common.js setupEpisodeList）
+window.episodesOf = (id) => {
+  const show = state.library.find((x) => x.kind === 'show' &&
+    (x.episodes || []).some((ep) => ep.id === id));
+  return show ? show.episodes : null;
+};
+
 async function boot() {
   try {
     const st = await api('/api/auth/status');
@@ -303,6 +310,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   $('#btnLogin').addEventListener('click', doViewerLogin);
   $('#loginPw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doViewerLogin(); });
   $('#btnClosePlayer').addEventListener('click', closePlayer);
+  $('#btnPlaylist').addEventListener('click', () =>
+    $('#playerPlaylist').classList.toggle('hidden'));
   $('#playerMask').addEventListener('click', (e) => { if (e.target.id === 'playerMask') closePlayer(); });
   $('#detailMask').addEventListener('click', (e) => { if (e.target.id === 'detailMask') e.target.classList.add('hidden'); });
 

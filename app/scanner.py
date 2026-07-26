@@ -72,6 +72,8 @@ def _walk(root: Path):
 
 async def scan_file(path: Path, lib_type: str, force: bool = False):
     """扫描单个文件：新文件入库 + 匹配元数据；已存在的按需更新。"""
+    if not parser.is_video(path.name):
+        return  # 字幕等非视频文件永不入库（下载器自动扫描会带进来）
     try:
         st = path.stat()
     except OSError:

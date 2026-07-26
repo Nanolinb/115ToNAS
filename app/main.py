@@ -214,6 +214,9 @@ def _entry_of_movie(row: dict) -> dict:
 @app.get("/api/library")
 async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
     rows = db.q("SELECT * FROM media WHERE status='ok'")
+    # 防御：字幕等非视频路径的历史脏数据不上墙（scan_file 已拒绝入库）
+    from .parser import is_video
+    rows = [r for r in rows if is_video(r["path"])]
     movies, shows = [], {}
     for r in rows:
         if r["type"] == "movie":
@@ -903,6 +906,41 @@ def _check_not_root(p: Path):
         raise HTTPException(403, "不能对媒体根目录本身操作")
 
 
+def _lib_type_of(p: Path) -> str | None:
+    """路径落在电影/剧集库目录内时返回 'movie'/'tv'，否则 None。"""
+    from . import scanner
+    for root, lt in ((scanner.movie_dir(), "movie"), (scanner.tv_dir(), "tv")):
+        root = root.resolve()
+        if p == root or root in p.parents:
+            return lt
+    return None
+
+
+async def _rescan_moved(dst: Path, is_dir: bool):
+    """文件管理移动/改名后同步影库：搬进播放库的视频立即入库（字幕等忽略）；
+    搬到库外的条目从影库删除——影库只收录指定电影/剧集目录内的文件。"""
+    from . import parser, scanner
+    lib = _lib_type_of(dst)
+    if lib is None:
+        if is_dir:
+            db.exe("DELETE FROM media WHERE path LIKE ?", (str(dst) + "/%",))
+        else:
+            db.exe("DELETE FROM media WHERE path=?", (str(dst),))
+        return
+    try:
+        if is_dir:
+            for files in scanner._walk(dst):
+                for f in files:
+                    await scanner.scan_file(f, lib)
+        elif parser.is_video(dst.name):
+            await scanner.scan_file(dst, lib)
+        else:
+            # 库内改名成非视频（如字幕）：不上墙
+            db.exe("DELETE FROM media WHERE path=?", (str(dst),))
+    except Exception as e:
+        print(f"[fs] 移动后同步影库失败: {e}")
+
+
 @app.post("/api/fs/delete")
 async def fs_delete(request: Request):
     body = await request.json()
@@ -943,6 +981,7 @@ async def fs_move(request: Request):
     except OSError as e:
         raise HTTPException(400, str(e))
     _sync_db_path(src, dst, is_dir)
+    asyncio.create_task(_rescan_moved(dst, is_dir))
     return {"ok": True, "path": str(dst)}
 
 
@@ -965,4 +1004,5 @@ async def fs_rename(request: Request):
     except OSError as e:
         raise HTTPException(400, str(e))
     _sync_db_path(src, dst, is_dir)
+    asyncio.create_task(_rescan_moved(dst, is_dir))
     return {"ok": True, "path": str(dst)}
