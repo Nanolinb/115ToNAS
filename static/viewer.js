@@ -119,7 +119,16 @@ async function openDetail(key) {
       </div>`).join('') + `</div>`;
   }
   modal.innerHTML = `<div class="mhead"><h3></h3><button class="mclose" data-close="detailMask">✕</button></div>` + html;
-  $('#detailMask').classList.remove('hidden');
+  // 弹窗外虚化背景：取封面上半部分铺满压暗（无封面则回到纯色遮罩）
+  const mask = $('#detailMask');
+  if (e.poster) {
+    mask.style.setProperty('--mask-bg', `url("${posterUrl(e.poster)}")`);
+    mask.classList.add('has-bg');
+  } else {
+    mask.style.removeProperty('--mask-bg');
+    mask.classList.remove('has-bg');
+  }
+  mask.classList.remove('hidden');
 
   modal.querySelectorAll('[data-play]').forEach((b) =>
     b.addEventListener('click', () => playMedia(+b.dataset.play)));
