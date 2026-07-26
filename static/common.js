@@ -128,7 +128,6 @@ async function playMedia(id) {
     try { await navigator.clipboard.writeText(playUrl); toast('直链已复制（可粘贴到极米/Infuse 等播放器）'); }
     catch (e) { prompt('复制此直链:', playUrl); }
   };
-  $('#btnDownloadFile').onclick = () => { window.open(playUrl, '_blank'); };
   setupEpisodeList(id);
   video.play().catch(() => {});
 }
@@ -138,11 +137,23 @@ async function playMedia(id) {
 // 数据由观影端 viewer.js 的 window.episodesOf(id) 提供；电影/单集时按钮隐藏
 function setupEpisodeList(currentId) {
   const btn = $('#btnPlaylist'), panel = $('#playerPlaylist');
+  const prev = $('#btnPrevEp'), next = $('#btnNextEp');
   if (!btn || !panel) return;
   const eps = (typeof window.episodesOf === 'function' && window.episodesOf(currentId)) || [];
   if (eps.length < 2) {
     btn.classList.add('hidden'); panel.classList.add('hidden');
+    if (prev) prev.classList.add('hidden');
+    if (next) next.classList.add('hidden');
     return;
+  }
+  const idx = eps.findIndex((e) => e.id === currentId);
+  // 上一集/下一集：第一集/最后一集时置灰
+  if (prev && next) {
+    prev.classList.remove('hidden'); next.classList.remove('hidden');
+    prev.disabled = idx <= 0;
+    next.disabled = idx < 0 || idx >= eps.length - 1;
+    prev.onclick = () => { if (idx > 0) playMedia(eps[idx - 1].id); };
+    next.onclick = () => { if (idx >= 0 && idx < eps.length - 1) playMedia(eps[idx + 1].id); };
   }
   btn.classList.remove('hidden');
   panel.innerHTML = eps.map((e) => {
