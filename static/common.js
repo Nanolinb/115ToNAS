@@ -77,7 +77,6 @@ async function playMedia(id) {
     video.appendChild(track);
   });
   $('#playerName').textContent = d.filename;
-  $('#playerMask').classList.remove('hidden');
 
   // 签名播放链接：外部播放器（IINA/VLC/电视）没有登录 Cookie，用 24h 签名令牌
   let playUrl = `${location.origin}/api/stream/${id}`;
@@ -85,6 +84,22 @@ async function playMedia(id) {
     const pl = await api(`/api/media/${id}/playlink`);
     playUrl = location.origin + pl.url;
   } catch (e) {}
+
+  // 安卓 TV App 内（原生桥存在时）：直接交给内嵌 ExoPlayer 全屏播放，
+  // 由电视/投影仪硬解，支持音轨/字幕切换，不再走 WebView 播放器
+  if (window.MediaHubNative && typeof MediaHubNative.play === 'function') {
+    const m = /[?&]pt=([^&]+)/.exec(playUrl);
+    const pt = m ? `?pt=${m[1]}` : '';
+    const subs = (d.subs || []).map((t, i) => ({
+      label: t.label || t.lang || `字幕 ${i + 1}`,
+      url: `${location.origin}/api/subtitle/${id}/${i}${pt}`,
+      ext: (t.path || '').split('.').pop() || '',
+    }));
+    MediaHubNative.play(playUrl, d.filename, JSON.stringify(subs));
+    return;
+  }
+
+  $('#playerMask').classList.remove('hidden');
 
   // 轨道信息（音轨数 + 音频编码）
   let info = { available: false, audio: 0, audio_codecs: [] };
@@ -130,17 +145,6 @@ async function playMedia(id) {
     });
   }
 
-  // 安卓 TV App 内（原生桥存在时）：提供「外部播放器」通道，
-  // 由电视/投影仪自己的播放器硬解，支持内嵌多音轨/字幕切换
-  const extBtn = $('#btnExternal');
-  if (window.MediaHubNative && typeof MediaHubNative.play === 'function') {
-    extBtn.classList.remove('hidden');
-    extBtn.onclick = () => {
-      MediaHubNative.play(playUrl, d.filename);
-    };
-  } else {
-    extBtn.classList.add('hidden');
-  }
   $('#btnCopyLink').onclick = async () => {
     try { await navigator.clipboard.writeText(playUrl); toast('直链已复制（可粘贴到极米/Infuse 等播放器）'); }
     catch (e) { prompt('复制此直链:', playUrl); }

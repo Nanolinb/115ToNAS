@@ -2,10 +2,8 @@ package com.mediahub115.viewer;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.KeyEvent;
@@ -16,14 +14,12 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
-import android.widget.Toast;
 
 /**
  * 115影库 · 观影端 TV 壳：
  * - WebView 加载 NAS 上的观影页（海报墙/搜索/过滤）
- * - 播放时通过 JS 桥调起设备自己的播放器（VLC / MX Player / Kodi / 系统播放器），
- *   由电视/投影仪硬件解码，支持内嵌多音轨与字幕切换，画质 = 原文件
- * - 零第三方依赖，APK 体积极小
+ * - 播放走内嵌 ExoPlayer（应用内全屏，电视/投影硬解，可选音轨/字幕，
+ *   音轨解不了自动回落服务端 AAC 转码），不跳外部 App
  */
 public class MainActivity extends Activity {
 
@@ -114,22 +110,18 @@ public class MainActivity extends Activity {
     public class NativeBridge {
 
         /**
-         * 调起设备上的外部播放器硬解播放。
-         * 外置播放器可自行切换内嵌音轨、加载内嵌/外挂字幕，
-         * 画质与直接插硬盘播放一致（原始码流、原始帧率）。
+         * 内嵌 ExoPlayer 播放（应用内全屏）：电视/投影硬件解码，
+         * 遥控器可选音轨/字幕；音轨解不了自动回落服务端 AAC 转码。
+         * subsJson: [{"label","url","ext"}]，可为 null。
          */
         @JavascriptInterface
-        public void play(final String url, final String title) {
+        public void play(final String url, final String title, final String subsJson) {
             runOnUiThread(() -> {
-                Intent i = new Intent(Intent.ACTION_VIEW);
-                i.setDataAndType(Uri.parse(url), "video/*");
-                try {
-                    startActivity(Intent.createChooser(i, title));
-                } catch (ActivityNotFoundException e) {
-                    Toast.makeText(MainActivity.this,
-                            "没有找到可用的播放器，请先安装 VLC 或 MX Player",
-                            Toast.LENGTH_LONG).show();
-                }
+                Intent i = new Intent(MainActivity.this, PlayerActivity.class);
+                i.putExtra("url", url);
+                i.putExtra("title", title);
+                i.putExtra("subs", subsJson);
+                startActivity(i);
             });
         }
     }
