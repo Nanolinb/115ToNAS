@@ -118,6 +118,11 @@ async def scan_file(path: Path, lib_type: str, force: bool = False):
         from . import baiduimg
         values["poster"] = await baiduimg.poster_for(
             (meta or {}).get("name_cn") or values["title"], values["year"])
+    # TMDB 没刮到简介 → subhd/豆瓣兜底
+    if not values["overview"]:
+        from . import overview as _ov
+        values["overview"] = await _ov.fetch_overview(
+            values["name_cn"] or values["title"], values["year"])
 
     if row:
         sets = ",".join(f"{k}=?" for k in values if k != "created_at")
@@ -173,6 +178,12 @@ async def rematch(media_id: int, tmdb_id: int | None = None,
         meta = await tmdb_client.match(title or row["title"], year or row["year"], kind)
     if not meta:
         return None
+    if not meta.get("overview"):
+        # TMDB 无简介（华语片常见）→ subhd/豆瓣兜底
+        from . import overview as _ov
+        meta["overview"] = await _ov.fetch_overview(
+            meta.get("name_cn") or meta.get("title") or row["title"],
+            meta.get("year") or row["year"])
     db.exe("""UPDATE media SET tmdb_id=?, title=?, name_cn=?, year=?, poster=?,
               backdrop=?, overview=?, genres=?, rating=? WHERE id=?""",
            (meta["tmdb_id"], meta["title"], meta["name_cn"], meta["year"],

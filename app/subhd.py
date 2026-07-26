@@ -8,6 +8,7 @@
    比百度图片更对口。
 """
 import re
+import html as _html
 
 import httpx
 
@@ -98,6 +99,48 @@ async def download_sub(cli: httpx.AsyncClient, sid: str) -> bytes | None:
     except Exception:
         return None
     return None
+
+
+_DETAIL_ID_RE = re.compile(r"href='/d/(\d+)'")
+_DETAIL_ITEM_RE = re.compile(
+    r"<a href='/d/(\d+)'>\s*<div class=\"pics\">\s*<img[^>]+alt=\"([^\"]*)\"", re.S)
+_PLOT_RE = re.compile(r"<b>剧情</b>：(.*?)<br>", re.S)
+
+
+def _pick_detail_id(html: str, keyword: str) -> str | None:
+    """搜索结果里挑详情页：优先条目标题（alt 首段中文名）与关键词完全一致，
+    否则退回第一条。避免搜「灌篮高手」却命中「大灌篮」。"""
+    first = None
+    for m in _DETAIL_ITEM_RE.finditer(html):
+        did, alt = m.group(1), _html.unescape(m.group(2)).strip()
+        if first is None:
+            first = did
+        if alt == keyword or alt.split(" ")[0] == keyword:
+            return did
+    if first:
+        return first
+    m = _DETAIL_ID_RE.search(html)
+    return m.group(1) if m else None
+
+
+async def search_overview(keyword: str) -> str | None:
+    """/d/ 影片页的「剧情」字段（完整简介，subhd 条目与豆瓣同源）。网络失败返回 None。"""
+    try:
+        async with client() as cli:
+            r = await cli.get(f"{BASE}/search/{keyword}")
+            did = _pick_detail_id(r.text, keyword)
+            if not did:
+                return None
+            r2 = await cli.get(f"{BASE}/d/{did}")
+        pm = _PLOT_RE.search(r2.text)
+        if not pm:
+            return None
+        # 剧情是中英文混排正文：去标签不补空格（避免「的<b>赤木</b>刚宪」变「的 赤木 刚宪」）
+        txt = re.sub(r"<[^>]+>", "", pm.group(1))
+        txt = _html.unescape(re.sub(r"\s+", " ", txt)).strip()
+        return txt or None
+    except Exception:
+        return None
 
 
 async def search_posters(keyword: str, limit: int = 8) -> list:

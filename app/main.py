@@ -254,6 +254,11 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
             e["episodes"].sort(key=lambda x: (x["season"], x["episode"] or 0))
             e["count"] = len(e["episodes"])
     entries.sort(key=lambda e: ((e["title"] or "").lower()))
+    # 缺简介的条目后台补（subhd/豆瓣），下轮刷新即见，不拖慢首屏
+    missing = [r["id"] for r in rows if not (r["overview"] or "").strip()]
+    if missing:
+        from . import overview as _ov
+        _ov.schedule_fill(missing[:20])
     return {"items": entries, "total": len(entries)}
 
 
