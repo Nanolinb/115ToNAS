@@ -65,6 +65,7 @@ const BROWSER_AUDIO_OK = new Set([
 async function playMedia(id) {
   const d = await api(`/api/media/${id}`);
   const video = $('#playerVideo');
+  if (video.dataset.mid && +video.dataset.mid !== id) savePos(video, +video.dataset.mid);
   video.innerHTML = '';
   // 多语言字幕轨道：中文 / English / 中英双语，浏览器原生 CC 菜单切换
   (d.subs || []).forEach((t, i) => {
@@ -156,8 +157,65 @@ async function playMedia(id) {
     try { await navigator.clipboard.writeText(playUrl); toast('直链已复制（可粘贴到极米/Infuse 等播放器）'); }
     catch (e) { prompt('复制此直链:', playUrl); }
   };
+  setupResume(video, id);
   setupEpisodeList(id);
   video.play().catch(() => {});
+}
+
+/* ---------- 续播（记住上次播放位置） ---------- */
+
+function fmtTime(s) {
+  s = Math.max(0, Math.floor(s));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
+  const mm = h ? String(m).padStart(2, '0') : String(m);
+  return (h ? h + ':' : '') + mm + ':' + String(ss).padStart(2, '0');
+}
+
+// 进度存浏览器 localStorage（mh_pos_<id>）：每台设备各记各的，30 秒以内不记，快播完自动清
+function savePos(video, id) {
+  const t = video.currentTime || 0, d = video.duration || 0;
+  const key = `mh_pos_${id}`;
+  try {
+    if (d && d - t <= 60) localStorage.removeItem(key);
+    else if (t > 30) localStorage.setItem(key, String(Math.floor(t)));
+  } catch (e) {}
+}
+
+function setupResume(video, id) {
+  video.dataset.mid = String(id);
+  // 播放中每 5 秒记一次进度（onXXX 赋值，换片不会叠加监听）
+  let lastSave = 0;
+  video.ontimeupdate = () => {
+    const now = Date.now();
+    if (now - lastSave < 5000) return;
+    lastSave = now;
+    savePos(video, id);
+  };
+  // 上次看到 30 秒以上 → 弹询问条：继续播放 / 从头开始
+  const promptEl = $('#resumePrompt');
+  if (!promptEl) return;
+  let saved = 0;
+  try { saved = parseInt(localStorage.getItem(`mh_pos_${id}`) || '0', 10) || 0; } catch (e) {}
+  if (saved <= 30) { promptEl.classList.add('hidden'); return; }
+  $('#resumeText').textContent = `上次看到 ${fmtTime(saved)}，是否从上次的位置开始？`;
+  promptEl.classList.remove('hidden');
+  $('#btnResumeYes').onclick = () => {
+    promptEl.classList.add('hidden');
+    if (video.dataset.transcode === '1') {
+      // 转码流不能按字节 seek：按时间点重新起流
+      video.src = `/api/stream/${id}?audio=aac&a=${video.dataset.a}&t=${saved}`;
+      video.play().catch(() => {});
+    } else {
+      video.currentTime = saved;
+      video.play().catch(() => {});
+    }
+  };
+  $('#btnResumeNo').onclick = () => {
+    promptEl.classList.add('hidden');
+    try { localStorage.removeItem(`mh_pos_${id}`); } catch (e) {}
+    video.currentTime = 0;
+    video.play().catch(() => {});
+  };
 }
 
 /* ---------- 播放列表（当前剧集选集） ---------- */
@@ -195,9 +253,13 @@ function setupEpisodeList(currentId) {
 
 function closePlayer() {
   const v = $('#playerVideo');
+  if (v.dataset.mid) savePos(v, +v.dataset.mid);
   v.pause(); v.removeAttribute('src'); v.load();
+  v.ontimeupdate = null; v.onseeking = null;
   const panel = $('#playerPlaylist');
   if (panel) panel.classList.add('hidden');
+  const rp = $('#resumePrompt');
+  if (rp) rp.classList.add('hidden');
   $('#playerMask').classList.add('hidden');
 }
 

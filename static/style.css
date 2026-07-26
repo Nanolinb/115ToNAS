@@ -141,8 +141,16 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .dot.g { background: var(--green); } .dot.r { background: var(--red); } .dot.y { background: var(--accent); }
 
 /* ---------- 播放器 ---------- */
-.player-modal { max-width: 1000px; background: #000; }
+.player-modal { max-width: 1000px; background: #000; position: relative; }
 .player-modal video { width: 100%; max-height: 76vh; display: block; background: #000; }
+
+/* 续播询问条：浮在视频上方 */
+.resume-prompt {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 10px; align-items: center;
+  background: rgba(20, 20, 20, .92); border: 1px solid #333; border-radius: 8px;
+  padding: 8px 14px; font-size: 13px; color: #ddd; z-index: 5; white-space: nowrap;
+}
 .player-bar { display: flex; gap: 10px; padding: 10px 14px; align-items: center; flex-wrap: wrap; }
 .playlist-panel { max-height: 32vh; overflow-y: auto; background: #0d0d0d; padding: 6px 10px; border-top: 1px solid #222; }
 .playlist-panel .pl-row { display: flex; gap: 10px; padding: 7px 8px; color: #bbb; font-size: 13px; border-radius: 6px; cursor: pointer; align-items: center; }
