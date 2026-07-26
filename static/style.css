@@ -153,6 +153,12 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
   background: rgba(20, 20, 20, .92); border: 1px solid #333; border-radius: 8px;
   padding: 8px 14px; font-size: 13px; color: #ddd; z-index: 5; white-space: nowrap;
 }
+
+/* 转码流的自绘进度条（原生条在流式响应下拖不出缓冲区，用它全程可点选） */
+.seek-bar { padding: 7px 10px; background: #000; cursor: pointer; }
+.seek-track { position: relative; height: 5px; background: #2a2a2a; border-radius: 3px; }
+.seek-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent2); border-radius: 3px; }
+video.transcode::-webkit-media-controls-timeline { display: none; }
 .player-bar { display: flex; gap: 10px; padding: 10px 14px; align-items: center; flex-wrap: wrap; }
 .playlist-panel { max-height: 32vh; overflow-y: auto; background: #0d0d0d; padding: 6px 10px; border-top: 1px solid #222; }
 .playlist-panel .pl-row { display: flex; gap: 10px; padding: 7px 8px; color: #bbb; font-size: 13px; border-radius: 6px; cursor: pointer; align-items: center; }

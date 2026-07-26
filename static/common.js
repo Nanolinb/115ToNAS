@@ -121,26 +121,12 @@ async function playMedia(id) {
   }
 
   // 浏览器解不了的音轨 / 优选音轨非第 0 条 → 服务端实时转 AAC（视频流原样拷贝）；
-  // 转码流不支持字节 range：拖出缓冲区时按时间点重新起流
+  // 转码流不支持字节 seek：自绘全时长进度条，点哪儿从哪儿重新起流
   video.dataset.a = String(pref);
   video.dataset.transcode = useTranscode ? '1' : '';
+  video.dataset.base = '0';
   video.src = `/api/stream/${id}` + (useTranscode ? `?audio=aac&a=${pref}` : '');
-  // 转码流 seek 重起：初始转码或菜单切轨后都可能用到，始终挂着，按标志生效；
-  // 用 onseeking 赋值而非 addEventListener，避免换片时旧监听叠加
-  {
-    let reloading = false;
-    video.onseeking = () => {
-      if (reloading || video.dataset.transcode !== '1') return;
-      const t = video.currentTime;
-      for (let i = 0; i < video.buffered.length; i++) {
-        if (t >= video.buffered.start(i) && t <= video.buffered.end(i)) return;
-      }
-      reloading = true;
-      video.src = `/api/stream/${id}?audio=aac&a=${video.dataset.a}&t=${Math.floor(t)}`;
-      video.play().catch(() => {});
-      setTimeout(() => { reloading = false; }, 800);
-    };
-  }
+  setupSeekBar(video, id);
 
   // 安卓 TV App 内（原生桥存在时）：提供「外部播放器」通道，
   // 由电视/投影仪自己的播放器硬解，支持内嵌多音轨/字幕切换
@@ -160,6 +146,77 @@ async function playMedia(id) {
   setupResume(video, id);
   setupEpisodeList(id);
   video.play().catch(() => {});
+}
+
+/* ---------- 转码流自绘进度条（全片时长，任意点选跳转） ---------- */
+
+// 流式转码响应没有字节 range，原生进度条只能拖到已缓冲处；
+// 自绘条始终展示全片时长：点在缓冲区内直接跳，点外面按时间点重新起流。
+// 进度换算：绝对位置 = base（当前流的起始秒）+ video.currentTime
+function setupSeekBar(video, id) {
+  const bar = $('#seekBar'), fill = $('#seekFill');
+  if (!bar) return;
+  let reloading = false;
+
+  const vis = () => {
+    const on = video.dataset.transcode === '1';
+    bar.classList.toggle('hidden', !on);
+    video.classList.toggle('transcode', on);  // 隐藏 Chrome 原生时间轴
+  };
+  vis();
+  video._seekVis = vis;  // 音轨菜单切轨（转码开启）后刷新
+
+  video.ondurationchange = () => {
+    const d = video.duration;
+    if (isFinite(d) && d > 0)
+      video.dataset.total = String(parseFloat(video.dataset.base || '0') + d);
+  };
+
+  const inBuffer = (abs) => {
+    const base = parseFloat(video.dataset.base || '0');
+    for (let i = 0; i < video.buffered.length; i++)
+      if (abs >= base + video.buffered.start(i) - 0.5 && abs <= base + video.buffered.end(i))
+        return true;
+    return false;
+  };
+  const startStreamAt = (abs) => {
+    const t = Math.max(0, Math.floor(abs));
+    video.dataset.base = String(t);
+    video.src = `/api/stream/${id}?audio=aac&a=${video.dataset.a}&t=${t}`;
+    video.play().catch(() => {});
+  };
+
+  bar.onclick = (e) => {
+    const total = parseFloat(video.dataset.total || '0');
+    if (!total || video.dataset.transcode !== '1') return;
+    const r = bar.getBoundingClientRect();
+    const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+    const abs = frac * total;
+    if (inBuffer(abs)) {
+      video.currentTime = abs - parseFloat(video.dataset.base || '0');
+      return;
+    }
+    startStreamAt(abs);
+  };
+
+  // 键盘左右键 / Safari 原生条拖出缓冲区时的兜底
+  video.onseeking = () => {
+    if (video.dataset.transcode !== '1' || reloading) return;
+    const abs = parseFloat(video.dataset.base || '0') + video.currentTime;
+    if (inBuffer(abs)) return;
+    reloading = true;
+    startStreamAt(abs);
+    setTimeout(() => { reloading = false; }, 800);
+  };
+}
+
+function updateSeekFill(video) {
+  const fill = $('#seekFill');
+  if (!fill) return;
+  const total = parseFloat(video.dataset.total || '0');
+  if (!total) { fill.style.width = '0%'; return; }
+  const abs = parseFloat(video.dataset.base || '0') + (video.currentTime || 0);
+  fill.style.width = Math.min(100, abs / total * 100) + '%';
 }
 
 /* ---------- 续播（记住上次播放位置） ---------- */
@@ -186,6 +243,7 @@ function setupResume(video, id) {
   // 播放中每 5 秒记一次进度（onXXX 赋值，换片不会叠加监听）
   let lastSave = 0;
   video.ontimeupdate = () => {
+    updateSeekFill(video);
     const now = Date.now();
     if (now - lastSave < 5000) return;
     lastSave = now;
@@ -203,6 +261,7 @@ function setupResume(video, id) {
     promptEl.classList.add('hidden');
     if (video.dataset.transcode === '1') {
       // 转码流不能按字节 seek：按时间点重新起流
+      video.dataset.base = String(saved);
       video.src = `/api/stream/${id}?audio=aac&a=${video.dataset.a}&t=${saved}`;
       video.play().catch(() => {});
     } else {
@@ -307,9 +366,13 @@ function setupAudioMenu(video, id, info, useTranscode, nativeSwitch) {
       sel.onchange = () => {
         video.dataset.a = sel.value;
         video.dataset.transcode = '1';
+        // 进度换算成绝对秒（重起流后 currentTime 从 0 起算）
+        const t = Math.floor(parseFloat(video.dataset.base || '0') + video.currentTime);
+        video.dataset.base = String(t);
         video.src = `/api/stream/${id}?audio=aac&a=${sel.value}` +
-          `&t=${Math.floor(video.currentTime)}`;
+          `&t=${t}`;
         video.play().catch(() => {});
+        if (video._seekVis) video._seekVis();
       };
       sel.title = '切换音轨（服务端转码，从当前进度继续）';
     }
