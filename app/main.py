@@ -272,13 +272,9 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
     if genre:
         entries = [e for e in entries if genre in (e["genres"] or "")]
 
-    # 季标：同剧有多季分组时每组都标；只有一组时仅非第一季才标
-    seasons = {}
+    # 季标：一律标注第N季（季号来自文件名解析的 Sxx）
     for e in entries:
         if e["kind"] == "show":
-            seasons.setdefault(e["base"], set()).add(e["season"])
-    for e in entries:
-        if e["kind"] == "show" and (e["season"] > 1 or len(seasons[e["base"]]) > 1):
             suf = f" 第{e['season']}季"
             e["title"] = (e["title"] or "") + suf
             if e["name_cn"]:
