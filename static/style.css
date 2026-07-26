@@ -107,15 +107,6 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
   background: rgba(0,0,0,.7); backdrop-filter: blur(4px);
   display: flex; align-items: center; justify-content: center; padding: 16px;
 }
-/* 详情弹窗带封面背景时：封面上半部分铺满，模糊+压暗当虚化底 */
-.modal-mask.has-bg::before {
-  content: ''; position: absolute; inset: 0;
-  background-image: var(--mask-bg);
-  background-size: cover; background-position: center top;
-  filter: blur(18px) brightness(.45);
-  transform: scale(1.12);  /* 吃掉模糊边缘的透明外溢 */
-}
-.modal-mask.has-bg .modal { position: relative; z-index: 1; }
 .modal {
   background: var(--bg2); border: 1px solid var(--border); border-radius: 14px;
   width: 100%; max-width: 760px; max-height: 90vh; overflow-y: auto;
@@ -131,10 +122,12 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .mclose:hover { color: var(--text); }
 
 .detail-hero { position: relative; height: 200px; overflow: hidden; border-radius: 14px 14px 0 0; }
-.detail-hero img { width: 100%; height: 100%; object-fit: cover; opacity: .5; }
+/* 取封面上半部分（中线以上）做弹窗内背景：cover + 顶部对齐 */
+.detail-hero img { width: 100%; height: 100%; object-fit: cover; object-position: center top; opacity: .5; }
 .detail-hero .fade { position: absolute; inset: 0; background: linear-gradient(transparent, var(--bg2)); }
 .detail-flex { display: flex; gap: 18px; margin-top: -60px; position: relative; padding: 0 18px; }
-.detail-flex .dposter { width: 130px; flex-shrink: 0; border-radius: 10px; border: 1px solid var(--border); }
+/* align-items 默认 stretch 会把只有宽度的 img 拉高变形，钉住顶部保持原始宽高比 */
+.detail-flex .dposter { width: 130px; align-self: flex-start; flex-shrink: 0; border-radius: 10px; border: 1px solid var(--border); }
 .detail-meta h2 { font-size: 22px; margin-bottom: 6px; }
 .detail-meta .tags { color: var(--muted); font-size: 13px; margin-bottom: 10px; }
 .detail-meta .overview { color: #c4ccd8; font-size: 13px; line-height: 1.7; margin: 12px 0; }
