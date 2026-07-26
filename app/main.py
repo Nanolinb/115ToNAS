@@ -546,6 +546,8 @@ async def stream(media_id: int, request: Request):
         raise HTTPException(404, "文件不存在")
 
     size = path.stat().st_size
+    if request.query_params.get("audio") == "aac":
+        return await _stream_aac(path, request)
     start, end = 0, size - 1
     status = 200
     range_header = request.headers.get("range", "")
@@ -582,6 +584,42 @@ async def stream(media_id: int, request: Request):
         headers["Content-Range"] = f"bytes {start}-{end}/{size}"
     return StreamingResponse(gen(), status_code=status, headers=headers,
                              media_type=mime)
+
+
+async def _stream_aac(path: Path, request: Request):
+    """浏览器解不了的音轨（AC3/EAC3/DTS/TrueHD）→ ffmpeg 实时转 AAC，
+    视频流原样拷贝（不重编码，CPU 占用低）。转码流无法按字节 seek，
+    前端拖进度条改用 ?t=秒 重新起流；客户端断开即杀 ffmpeg。"""
+    try:
+        t = max(0.0, float(request.query_params.get("t", 0) or 0))
+    except ValueError:
+        t = 0.0
+    cmd = ["ffmpeg", "-v", "error"]
+    if t:
+        cmd += ["-ss", f"{t:.3f}"]
+    cmd += ["-i", str(path),
+            "-map", "0:v:0", "-c:v", "copy",
+            "-map", "0:a:0", "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            "-f", "mp4", "pipe:1"]
+    proc = await asyncio.create_subprocess_exec(
+        *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+
+    async def gen():
+        try:
+            while True:
+                chunk = await proc.stdout.read(262144)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+
+    return StreamingResponse(gen(), media_type="video/mp4")
 
 
 @app.get("/api/subtitle/{media_id}")

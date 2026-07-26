@@ -66,7 +66,6 @@ async function playMedia(id) {
   const d = await api(`/api/media/${id}`);
   const video = $('#playerVideo');
   video.innerHTML = '';
-  video.src = `/api/stream/${id}`;
   // 多语言字幕轨道：中文 / English / 中英双语，浏览器原生 CC 菜单切换
   (d.subs || []).forEach((t, i) => {
     const track = document.createElement('track');
@@ -109,8 +108,26 @@ async function playMedia(id) {
     iinaBtn.classList.add('hidden');
   }
   if (badCodecs.length) {
-    toast(`音频编码 ${[...new Set(badCodecs)].join(' / ')} 浏览器无法解码（会无声）→ ` +
-      (isMac ? '点「🍎 用 IINA 打开」' : '请用「电视播放器」或复制直链到 VLC / Infuse'), 5000);
+    toast(`音频编码 ${[...new Set(badCodecs)].join(' / ')} 浏览器无法解码 → ` +
+      '已实时转码 AAC 播放（拖动进度条会重新起流）；要原始音轨可用 IINA / 电视播放器', 5000);
+  }
+
+  // 浏览器解不了的音轨 → 服务端实时转 AAC（视频流原样拷贝）；
+  // 转码流不支持字节 range：拖出缓冲区时按时间点重新起流
+  video.src = `/api/stream/${id}` + (badCodecs.length ? '?audio=aac' : '');
+  if (badCodecs.length) {
+    let reloading = false;
+    video.addEventListener('seeking', () => {
+      if (reloading) return;
+      const t = video.currentTime;
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (t >= video.buffered.start(i) && t <= video.buffered.end(i)) return;
+      }
+      reloading = true;
+      video.src = `/api/stream/${id}?audio=aac&t=${Math.floor(t)}`;
+      video.play().catch(() => {});
+      setTimeout(() => { reloading = false; }, 800);
+    });
   }
 
   // 安卓 TV App 内（原生桥存在时）：提供「外部播放器」通道，
