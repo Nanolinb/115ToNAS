@@ -653,7 +653,9 @@ async def _stream_aac(path: Path, request: Request):
     cmd += ["-i", str(path),
             "-map", "0:v:0", "-c:v", "copy",
             "-map", f"0:a:{a}", "-c:a", "aac", "-b:a", "192k",
-            "-movflags", "frag_keyframe+empty_moov+default_base_moof",
+            # 不用 empty_moov：让 moov 带上整部影片时长，浏览器进度条才可拖
+            # （empty_moov 时长为 0，Chrome 当直播流处理，进度条锁死）
+            "-movflags", "frag_keyframe+default_base_moof",
             "-f", "mp4", "pipe:1"]
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
