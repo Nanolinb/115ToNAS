@@ -122,8 +122,8 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .mclose:hover { color: var(--text); }
 
 .detail-hero { position: relative; height: 200px; overflow: hidden; border-radius: 14px 14px 0 0; }
-/* 取封面上半部分（中线以上）做弹窗内背景：cover + 顶部对齐 */
-.detail-hero img { width: 100%; height: 100%; object-fit: cover; object-position: center top; opacity: .5; }
+/* 取封面从上至下 6 等分的第 2~3 份（约 1/6~1/2 处）做弹窗内背景：cover + 垂直 33% 对齐 */
+.detail-hero img { width: 100%; height: 100%; object-fit: cover; object-position: center 33%; opacity: .5; }
 .detail-hero .fade { position: absolute; inset: 0; background: linear-gradient(transparent, var(--bg2)); }
 .detail-flex { display: flex; gap: 18px; margin-top: -60px; position: relative; padding: 0 18px; }
 /* align-items 默认 stretch 会把只有宽度的 img 拉高变形，钉住顶部保持原始宽高比 */
