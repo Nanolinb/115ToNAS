@@ -90,7 +90,7 @@ async function openDetail(key) {
     ${e.kind === 'movie' ? `<button class="btn" data-subs="${e.id}">搜索字幕</button>` : ''}
     <button class="btn" data-poster="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">更换封面</button>
     <button class="btn" data-upload="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">上传封面</button>
-    <button class="btn" data-rematch="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">重新匹配信息</button>` : '';
+    <button class="btn" data-rematch="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">刷新影片信息</button>` : '';
   let html = `
     <div class="detail-hero">${heroImg}<div class="fade"></div></div>
     <div class="detail-flex">
@@ -250,7 +250,7 @@ async function openPosterPicker(mediaId) {
 /* ---------- 手动匹配（仅管理端会话可见） ---------- */
 
 async function openRematch(mediaId) {
-  const kw = prompt('输入用于 TMDB 搜索的片名（留空自动用文件名解析；外文原名更准）:');
+  const kw = prompt('输入影片名称或关键字（留空自动用文件名解析；外文原名更准）:');
   if (kw === null) return;
   let cands;
   try {
