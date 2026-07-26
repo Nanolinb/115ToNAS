@@ -222,9 +222,12 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
         if r["type"] == "movie":
             movies.append(_entry_of_movie(r))
         else:
-            gkey = f"t{r['tmdb_id']}" if r["tmdb_id"] else f"n:{r['title']}"
-            show = shows.setdefault(gkey, {
-                "key": gkey, "kind": "show", "title": r["title"],
+            # 按 剧+季 分组（季号来自文件名解析），同剧不同季各自成卡
+            season = r["season"] or 1
+            base = f"t{r['tmdb_id']}" if r["tmdb_id"] else f"n:{r['title']}"
+            show = shows.setdefault(f"{base}:s{season}", {
+                "key": f"{base}:s{season}", "kind": "show", "base": base,
+                "season": season, "title": r["title"],
                 "name_cn": r["name_cn"], "year": r["year"], "poster": r["poster"],
                 "rating": r["rating"], "genres": r["genres"] or "",
                 "overview": r["overview"] or "", "tmdb_id": r["tmdb_id"],
@@ -252,6 +255,17 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
     if genre:
         entries = [e for e in entries if genre in (e["genres"] or "")]
 
+    # 季标：同剧有多季分组时每组都标；只有一组时仅非第一季才标
+    seasons = {}
+    for e in entries:
+        if e["kind"] == "show":
+            seasons.setdefault(e["base"], set()).add(e["season"])
+    for e in entries:
+        if e["kind"] == "show" and (e["season"] > 1 or len(seasons[e["base"]]) > 1):
+            suf = f" 第{e['season']}季"
+            e["title"] = (e["title"] or "") + suf
+            if e["name_cn"]:
+                e["name_cn"] += suf
     for e in entries:
         if e["kind"] == "show":
             e["episodes"].sort(key=lambda x: (x["season"], x["episode"] or 0))
