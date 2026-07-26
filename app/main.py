@@ -47,6 +47,7 @@ VIEWER_GET_EXACT = ("/api/library",)
 VIEWER_PREFIXES = ("/api/poster/", "/api/stream/", "/api/subtitle/")
 _VIEWER_MEDIA_RE = re.compile(r"^/api/media/\d+$")
 _VIEWER_PLAYLINK_RE = re.compile(r"^/api/media/\d+/playlink$")
+_VIEWER_TRACKS_RE = re.compile(r"^/api/media/\d+/tracks$")
 
 
 @app.middleware("http")
@@ -58,6 +59,7 @@ async def auth_middleware(request: Request, call_next):
         path in VIEWER_GET_EXACT
         or bool(_VIEWER_MEDIA_RE.match(path))
         or bool(_VIEWER_PLAYLINK_RE.match(path))
+        or bool(_VIEWER_TRACKS_RE.match(path))
         or any(path.startswith(p) for p in VIEWER_PREFIXES)
     )
     try:
@@ -313,33 +315,72 @@ async def media_detail(media_id: int):
 
 @app.get("/api/media/{media_id}/tracks")
 async def media_tracks(media_id: int):
-    """ffprobe 探测内嵌音轨/字幕数量与音频编码（网页音轨菜单与无声提示用）。"""
+    """ffprobe 探测内嵌音轨/字幕：数量、音频编码、语言标签（网页音轨菜单用）。"""
     row = db.one("SELECT path FROM media WHERE id=?", (media_id,))
     if not row:
         raise HTTPException(404, "not found")
     path = Path(row["path"])
     if not path.exists():
         raise HTTPException(404, "文件不存在")
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            "ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name",
-            "-of", "csv=p=0", str(path),
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
-        out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
-    except FileNotFoundError:
-        return {"available": False, "audio": 0, "subtitle": 0, "audio_codecs": []}
-    except asyncio.TimeoutError:
-        return {"available": False, "audio": 0, "subtitle": 0, "audio_codecs": []}
-    audio_codecs, sub_n = [], 0
-    for line in out.decode(errors="ignore").splitlines():
-        parts = [p.strip() for p in line.split(",") if p.strip()]
-        if "audio" in parts:
-            codec = next((p for p in parts if p != "audio"), "")
-            audio_codecs.append(codec)
-        elif "subtitle" in parts:
+    streams = await _probe_streams(path)
+    if streams is None:
+        return {"available": False, "audio": 0, "subtitle": 0,
+                "audio_codecs": [], "audio_tracks": [], "preferred_audio": 0}
+    audio_codecs, audio_tracks, sub_n = [], [], 0
+    for s in streams:
+        if s.get("codec_type") == "audio":
+            audio_codecs.append(s.get("codec_name") or "")
+            tags = s.get("tags") or {}
+            audio_tracks.append({"i": len(audio_tracks),
+                                 "lang": (tags.get("language") or "").lower(),
+                                 "title": tags.get("title") or "",
+                                 "codec": s.get("codec_name") or ""})
+        elif s.get("codec_type") == "subtitle":
             sub_n += 1
     return {"available": True, "audio": len(audio_codecs),
-            "subtitle": sub_n, "audio_codecs": audio_codecs}
+            "subtitle": sub_n, "audio_codecs": audio_codecs,
+            "audio_tracks": audio_tracks,
+            "preferred_audio": _preferred_audio(audio_tracks)}
+
+
+async def _probe_streams(path: Path):
+    """ffprobe JSON 探测全部流（含 language/title 标签）；失败返回 None。"""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "ffprobe", "-v", "error", "-show_entries",
+            "stream=index,codec_type,codec_name:stream_tags=language,title",
+            "-of", "json", str(path),
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
+        return json.loads(out.decode(errors="ignore") or "{}").get("streams", [])
+    except (FileNotFoundError, asyncio.TimeoutError, ValueError):
+        return None
+
+
+# 音轨语言识别：ffprobe 的 language 标签是 ISO 639 码，命名习惯各异，归一成 zh/en/ja
+_LANG_ALIASES = (
+    ("zh", {"zh", "chi", "zho", "cmn", "yue"}, ("中文", "国语", "普通话", "粤")),
+    ("en", {"en", "eng"}, ("english",)),
+    ("ja", {"ja", "jp", "jpn"}, ("日语", "日文", "japanese")),
+)
+
+
+def _lang_of(track: dict) -> str:
+    lang = (track.get("lang") or "").lower()
+    title = (track.get("title") or "").lower()
+    for canon, codes, words in _LANG_ALIASES:
+        if lang in codes or any(w in title for w in words):
+            return canon
+    return lang
+
+
+def _preferred_audio(tracks: list) -> int:
+    """多音轨时优先 中→英→日，都没有则第 0 条（改优先级只动这里）。"""
+    for want in ("zh", "en", "ja"):
+        for t in tracks:
+            if _lang_of(t) == want:
+                return t["i"]
+    return 0
 
 
 @app.get("/api/media/{media_id}/playlink")
@@ -594,12 +635,24 @@ async def _stream_aac(path: Path, request: Request):
         t = max(0.0, float(request.query_params.get("t", 0) or 0))
     except ValueError:
         t = 0.0
+    # 音轨选择：?a=N 指定第 N 条音轨；缺省按 中→英→日 优选（多音轨影片自动说中文/英文）
+    try:
+        a = int(request.query_params.get("a", "") or -1)
+    except ValueError:
+        a = -1
+    if a < 0:
+        tracks = [{"i": n,
+                   "lang": (s.get("tags") or {}).get("language", ""),
+                   "title": (s.get("tags") or {}).get("title", "")}
+                  for n, s in enumerate(x for x in (await _probe_streams(path) or [])
+                                        if x.get("codec_type") == "audio")]
+        a = _preferred_audio(tracks)
     cmd = ["ffmpeg", "-v", "error"]
     if t:
         cmd += ["-ss", f"{t:.3f}"]
     cmd += ["-i", str(path),
             "-map", "0:v:0", "-c:v", "copy",
-            "-map", "0:a:0", "-c:a", "aac", "-b:a", "192k",
+            "-map", f"0:a:{a}", "-c:a", "aac", "-b:a", "192k",
             "-movflags", "frag_keyframe+empty_moov+default_base_moof",
             "-f", "mp4", "pipe:1"]
     proc = await asyncio.create_subprocess_exec(

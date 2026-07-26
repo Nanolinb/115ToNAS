@@ -86,14 +86,21 @@ async function playMedia(id) {
     playUrl = location.origin + pl.url;
   } catch (e) {}
 
-  // 轨道信息（音轨数 + 音频编码）
-  let info = { available: false, audio: 0, audio_codecs: [] };
+  // 轨道信息（音轨数 + 音频编码 + 语言标签）
+  let info = { available: false, audio: 0, audio_codecs: [], audio_tracks: [], preferred_audio: 0 };
   try { info = await api(`/api/media/${id}/tracks`); } catch (e) {}
-  setupAudioMenu(video, info);
 
   const badCodecs = (info.audio_codecs || []).filter((c) => !BROWSER_AUDIO_OK.has(c));
+  const tracks = info.audio_tracks || [];
+  const pref = info.preferred_audio || 0;
   const isMac = /Macintosh|Mac OS X/.test(navigator.userAgent);
   const nativeOk = /\.(mp4|m4v|mov|webm)(\?|$)/i.test(d.filename || '');
+
+  // 只有 Safari 实现了原生 audioTracks 切换；其他浏览器靠服务端转码流换音轨
+  const nativeSwitch = !!video.audioTracks && tracks.length > 1;
+  // 需要转码：有解不了的音轨；或优选音轨不是第 0 条且不能原生切换（直放只会播第 0 条）
+  const useTranscode = badCodecs.length > 0 || (tracks.length > 1 && pref !== 0 && !nativeSwitch);
+  setupAudioMenu(video, id, info, useTranscode, nativeSwitch);
 
   // Mac 上：容器不支持 或 音频编码浏览器解不了 → 提供「用 IINA 打开」（直接拉起）
   const iinaBtn = $('#btnIina');
@@ -112,22 +119,26 @@ async function playMedia(id) {
       '已实时转码 AAC 播放（拖动进度条会重新起流）；要原始音轨可用 IINA / 电视播放器', 5000);
   }
 
-  // 浏览器解不了的音轨 → 服务端实时转 AAC（视频流原样拷贝）；
+  // 浏览器解不了的音轨 / 优选音轨非第 0 条 → 服务端实时转 AAC（视频流原样拷贝）；
   // 转码流不支持字节 range：拖出缓冲区时按时间点重新起流
-  video.src = `/api/stream/${id}` + (badCodecs.length ? '?audio=aac' : '');
-  if (badCodecs.length) {
+  video.dataset.a = String(pref);
+  video.dataset.transcode = useTranscode ? '1' : '';
+  video.src = `/api/stream/${id}` + (useTranscode ? `?audio=aac&a=${pref}` : '');
+  // 转码流 seek 重起：初始转码或菜单切轨后都可能用到，始终挂着，按标志生效；
+  // 用 onseeking 赋值而非 addEventListener，避免换片时旧监听叠加
+  {
     let reloading = false;
-    video.addEventListener('seeking', () => {
-      if (reloading) return;
+    video.onseeking = () => {
+      if (reloading || video.dataset.transcode !== '1') return;
       const t = video.currentTime;
       for (let i = 0; i < video.buffered.length; i++) {
         if (t >= video.buffered.start(i) && t <= video.buffered.end(i)) return;
       }
       reloading = true;
-      video.src = `/api/stream/${id}?audio=aac&t=${Math.floor(t)}`;
+      video.src = `/api/stream/${id}?audio=aac&a=${video.dataset.a}&t=${Math.floor(t)}`;
       video.play().catch(() => {});
       setTimeout(() => { reloading = false; }, 800);
-    });
+    };
   }
 
   // 安卓 TV App 内（原生桥存在时）：提供「外部播放器」通道，
@@ -192,22 +203,54 @@ function closePlayer() {
 
 /* ---------- 音轨菜单 ---------- */
 
-function setupAudioMenu(video, info) {
+// ISO 639 语言码 → 显示名（ffprobe 标签命名习惯不一，常见码都归一到这里）
+const LANG_NAMES = {
+  zh: '中文', chi: '中文', zho: '中文', cmn: '中文', yue: '粤语',
+  en: 'English', eng: 'English',
+  ja: '日语', jp: '日语', jpn: '日语',
+  it: '意大利语', ita: '意大利语', es: '西班牙语', spa: '西班牙语',
+  fr: '法语', fre: '法语', fra: '法语', de: '德语', ger: '德语', deu: '德语',
+  ko: '韩语', kor: '韩语', ru: '俄语', rus: '俄语', pt: '葡萄牙语', por: '葡萄牙语',
+  th: '泰语', tha: '泰语', und: '',
+};
+
+function trackLabel(t, i) {
+  const lang = LANG_NAMES[(t.lang || '').toLowerCase()] || t.lang || '';
+  const bits = [lang, t.title, t.codec ? t.codec.toUpperCase() : ''].filter(Boolean);
+  return `音轨 ${i + 1}${bits.length ? ' · ' + esc(bits.join(' / ')) : ''}`;
+}
+
+// useTranscode：当前播放的是服务端转码流；nativeSwitch：浏览器（Safari）能原生切内嵌音轨
+function setupAudioMenu(video, id, info, useTranscode, nativeSwitch) {
   const sel = $('#audioTrackSel');
   sel.classList.remove('hidden');
+  const tracks = (info && info.audio_tracks) || [];
   const n = (info && info.audio) || 0;
-  // 浏览器里只有 Safari 实现了 audioTracks；Chrome/WebView 不支持网页内切音轨
-  const canSwitch = !!video.audioTracks && n > 1;
-  if (canSwitch) {
-    const at = video.audioTracks;
+  if (tracks.length > 1) {
     sel.disabled = false;
-    sel.innerHTML = Array.from({ length: n }, (_, i) =>
-      `<option value="${i}">音轨 ${i + 1}${at[i] && at[i].label ? ' · ' + esc(at[i].label) : ''}</option>`
-    ).join('');
-    sel.onchange = () => {
+    sel.innerHTML = tracks.map((t, i) =>
+      `<option value="${i}">${trackLabel(t, i)}</option>`).join('');
+    if (nativeSwitch && !useTranscode) {
+      // Safari：直接启用/禁用内嵌音轨，初始启用优选轨
+      const at = video.audioTracks;
+      sel.value = String(info.preferred_audio || 0);
       for (let i = 0; i < at.length; i++) at[i].enabled = (i === +sel.value);
-    };
-    sel.title = '切换内嵌音轨';
+      sel.onchange = () => {
+        for (let i = 0; i < at.length; i++) at[i].enabled = (i === +sel.value);
+      };
+      sel.title = '切换内嵌音轨';
+    } else {
+      // Chrome/Edge 等：换转码流的 a 参数，从当前进度重起（秒级生效）
+      sel.value = String(video.dataset.a || info.preferred_audio || 0);
+      sel.onchange = () => {
+        video.dataset.a = sel.value;
+        video.dataset.transcode = '1';
+        video.src = `/api/stream/${id}?audio=aac&a=${sel.value}` +
+          `&t=${Math.floor(video.currentTime)}`;
+        video.play().catch(() => {});
+      };
+      sel.title = '切换音轨（服务端转码，从当前进度继续）';
+    }
   } else {
     sel.disabled = true;
     sel.innerHTML = `<option>${n > 1 ? n + ' 条音轨' : '单音轨'}</option>`;
