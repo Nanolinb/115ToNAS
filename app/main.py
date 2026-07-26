@@ -217,6 +217,23 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
     # 防御：字幕等非视频路径的历史脏数据不上墙（scan_file 已拒绝入库）
     from .parser import is_video
     rows = [r for r in rows if is_video(r["path"])]
+    # 现实校验：文件已被搬走/删除（不经本应用），或指向不在指定库目录内
+    # → 标 missing 立即下墙。库目录挂载不可达时跳过该校验，防止误判
+    from . import scanner as _sc
+    roots_cfg = [p.resolve() for p in (_sc.movie_dir(), _sc.tv_dir())]
+    roots_up = [p for p in roots_cfg if p.exists()]
+    stale = []
+    for r in rows:
+        p = Path(r["path"])
+        under = [root for root in roots_cfg if p == root or root in p.parents]
+        if not under or (any(root in roots_up for root in under)
+                         and not p.exists()):
+            stale.append(r["id"])
+    if stale:
+        db.exe(f"UPDATE media SET status='missing' "
+               f"WHERE id IN ({','.join('?' * len(stale))})", stale)
+        gone = set(stale)
+        rows = [r for r in rows if r["id"] not in gone]
     movies, shows = [], {}
     for r in rows:
         if r["type"] == "movie":
