@@ -322,12 +322,17 @@ async def media_tracks(media_id: int):
     path = Path(row["path"])
     if not path.exists():
         raise HTTPException(404, "文件不存在")
-    streams = await _probe_streams(path)
-    if streams is None:
+    data = await _probe_streams(path)
+    if data is None:
         return {"available": False, "audio": 0, "subtitle": 0,
-                "audio_codecs": [], "audio_tracks": [], "preferred_audio": 0}
+                "audio_codecs": [], "audio_tracks": [], "preferred_audio": 0,
+                "duration": 0}
+    try:
+        duration = float((data.get("format") or {}).get("duration") or 0)
+    except (TypeError, ValueError):
+        duration = 0
     audio_codecs, audio_tracks, sub_n = [], [], 0
-    for s in streams:
+    for s in data.get("streams", []):
         if s.get("codec_type") == "audio":
             audio_codecs.append(s.get("codec_name") or "")
             tags = s.get("tags") or {}
@@ -340,7 +345,8 @@ async def media_tracks(media_id: int):
     return {"available": True, "audio": len(audio_codecs),
             "subtitle": sub_n, "audio_codecs": audio_codecs,
             "audio_tracks": audio_tracks,
-            "preferred_audio": _preferred_audio(audio_tracks)}
+            "preferred_audio": _preferred_audio(audio_tracks),
+            "duration": duration}
 
 
 async def _probe_streams(path: Path):
@@ -348,11 +354,11 @@ async def _probe_streams(path: Path):
     try:
         proc = await asyncio.create_subprocess_exec(
             "ffprobe", "-v", "error", "-show_entries",
-            "stream=index,codec_type,codec_name:stream_tags=language,title",
+            "stream=index,codec_type,codec_name:stream_tags=language,title:format=duration",
             "-of", "json", str(path),
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=20)
-        return json.loads(out.decode(errors="ignore") or "{}").get("streams", [])
+        return json.loads(out.decode(errors="ignore") or "{}")
     except (FileNotFoundError, asyncio.TimeoutError, ValueError):
         return None
 
@@ -641,10 +647,11 @@ async def _stream_aac(path: Path, request: Request):
     except ValueError:
         a = -1
     if a < 0:
+        data = await _probe_streams(path) or {}
         tracks = [{"i": n,
                    "lang": (s.get("tags") or {}).get("language", ""),
                    "title": (s.get("tags") or {}).get("title", "")}
-                  for n, s in enumerate(x for x in (await _probe_streams(path) or [])
+                  for n, s in enumerate(x for x in data.get("streams", [])
                                         if x.get("codec_type") == "audio")]
         a = _preferred_audio(tracks)
     cmd = ["ffmpeg", "-v", "error"]

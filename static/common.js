@@ -126,7 +126,7 @@ async function playMedia(id) {
   video.dataset.transcode = useTranscode ? '1' : '';
   video.dataset.base = '0';
   video.src = `/api/stream/${id}` + (useTranscode ? `?audio=aac&a=${pref}` : '');
-  setupSeekBar(video, id);
+  setupSeekBar(video, id, info.duration || 0);
 
   // 安卓 TV App 内（原生桥存在时）：提供「外部播放器」通道，
   // 由电视/投影仪自己的播放器硬解，支持内嵌多音轨/字幕切换
@@ -153,15 +153,18 @@ async function playMedia(id) {
 // 流式转码响应没有字节 range，原生进度条只能拖到已缓冲处；
 // 自绘条始终展示全片时长：点在缓冲区内直接跳，点外面按时间点重新起流。
 // 进度换算：绝对位置 = base（当前流的起始秒）+ video.currentTime
-function setupSeekBar(video, id) {
+function setupSeekBar(video, id, duration) {
   const bar = $('#seekBar'), fill = $('#seekFill');
   if (!bar) return;
   let reloading = false;
+  // 后端探测的全片时长：进度条立即有总长，不等 metadata
+  if (duration > 0) video.dataset.total = String(duration);
 
   const vis = () => {
     const on = video.dataset.transcode === '1';
     bar.classList.toggle('hidden', !on);
     video.classList.toggle('transcode', on);  // 隐藏 Chrome 原生时间轴
+    updateSeekFill(video);
   };
   vis();
   video._seekVis = vis;  // 音轨菜单切轨（转码开启）后刷新
@@ -186,10 +189,11 @@ function setupSeekBar(video, id) {
     video.play().catch(() => {});
   };
 
+  const track = bar.querySelector('.seek-track');
   bar.onclick = (e) => {
     const total = parseFloat(video.dataset.total || '0');
     if (!total || video.dataset.transcode !== '1') return;
-    const r = bar.getBoundingClientRect();
+    const r = track.getBoundingClientRect();
     const frac = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
     const abs = frac * total;
     if (inBuffer(abs)) {
@@ -211,12 +215,17 @@ function setupSeekBar(video, id) {
 }
 
 function updateSeekFill(video) {
-  const fill = $('#seekFill');
+  const fill = $('#seekFill'), time = $('#seekTime');
   if (!fill) return;
   const total = parseFloat(video.dataset.total || '0');
-  if (!total) { fill.style.width = '0%'; return; }
+  if (!total) {
+    fill.style.width = '0%';
+    if (time) time.textContent = '';
+    return;
+  }
   const abs = parseFloat(video.dataset.base || '0') + (video.currentTime || 0);
   fill.style.width = Math.min(100, abs / total * 100) + '%';
+  if (time) time.textContent = `${fmtTime(abs)} / ${fmtTime(total)}`;
 }
 
 /* ---------- 续播（记住上次播放位置） ---------- */
