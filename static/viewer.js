@@ -107,7 +107,7 @@ async function openDetail(key) {
       </div>
     </div>`;
   if (e.kind === 'show') {
-    html += `<div style="margin-top:18px">` + e.episodes.map((ep) => `
+    html += `<div class="ep-list">` + e.episodes.map((ep) => `
       <div class="ep-row">
         <span class="ep-label">S${String(ep.season).padStart(2, '0')}E${String(ep.episode || '?').padStart(2, '0')}</span>
         <span class="ep-name">${esc(ep.name)}</span>
