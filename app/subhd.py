@@ -104,7 +104,7 @@ async def download_sub(cli: httpx.AsyncClient, sid: str) -> bytes | None:
 _DETAIL_ID_RE = re.compile(r"href='/d/(\d+)'")
 _DETAIL_ITEM_RE = re.compile(
     r"<a href='/d/(\d+)'>\s*<div class=\"pics\">\s*<img[^>]+alt=\"([^\"]*)\"", re.S)
-_PLOT_RE = re.compile(r"<b>剧情</b>：(.*?)<br>", re.S)
+_FIELDS_RE = re.compile(r"<b>(名称|年代|类型|剧情)</b>：(.*?)<br>", re.S)
 
 
 def _pick_detail_id(html: str, keyword: str) -> str | None:
@@ -123,8 +123,8 @@ def _pick_detail_id(html: str, keyword: str) -> str | None:
     return m.group(1) if m else None
 
 
-async def search_overview(keyword: str) -> str | None:
-    """/d/ 影片页的「剧情」字段（完整简介，subhd 条目与豆瓣同源）。网络失败返回 None。"""
+async def _search_fields(keyword: str) -> dict | None:
+    """详情页字段一把抓：名称/年代/类型/剧情（条目与豆瓣同源）。网络失败返回 None。"""
     try:
         async with client() as cli:
             r = await cli.get(f"{BASE}/search/{keyword}")
@@ -132,15 +132,40 @@ async def search_overview(keyword: str) -> str | None:
             if not did:
                 return None
             r2 = await cli.get(f"{BASE}/d/{did}")
-        pm = _PLOT_RE.search(r2.text)
-        if not pm:
-            return None
-        # 剧情是中英文混排正文：去标签不补空格（避免「的<b>赤木</b>刚宪」变「的 赤木 刚宪」）
-        txt = re.sub(r"<[^>]+>", "", pm.group(1))
-        txt = _html.unescape(re.sub(r"\s+", " ", txt)).strip()
-        return txt or None
+        out = {}
+        for m in _FIELDS_RE.finditer(r2.text):
+            # 字段值是中英文混排正文：去标签不补空格（避免「的<b>赤木</b>刚宪」变「的 赤木 刚宪」）
+            txt = re.sub(r"<[^>]+>", "", m.group(2))
+            txt = _html.unescape(re.sub(r"\s+", " ", txt)).strip()
+            if txt:
+                out[m.group(1)] = txt
+        return out or None
     except Exception:
         return None
+
+
+async def search_overview(keyword: str) -> str | None:
+    """/d/ 影片页的「剧情」字段（完整简介）。网络失败返回 None。"""
+    fields = await _search_fields(keyword)
+    return (fields or {}).get("剧情") or None
+
+
+async def search_meta(keyword: str) -> dict | None:
+    """返回 {"overview","year","genres"}（可缺项；genres 逗号分隔中文名）。
+    网络失败返回 None。"""
+    fields = await _search_fields(keyword)
+    if not fields:
+        return None
+    out = {}
+    if fields.get("剧情"):
+        out["overview"] = fields["剧情"]
+    m = re.search(r"\d{4}", fields.get("年代", ""))
+    if m:
+        out["year"] = int(m.group(0))
+    if fields.get("类型"):
+        out["genres"] = ",".join(
+            g.strip() for g in fields["类型"].split("/") if g.strip())
+    return out or None
 
 
 async def search_posters(keyword: str, limit: int = 8) -> list:
