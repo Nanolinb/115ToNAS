@@ -211,6 +211,7 @@ def _entry_of_movie(row: dict) -> dict:
         "key": f"m{row['id']}", "kind": "movie", "id": row["id"],
         "title": row["title"], "name_cn": row["name_cn"],
         "year": row["year"], "poster": row["poster"], "rating": row["rating"],
+        "backdrop": row.get("backdrop"),
         "genres": row["genres"] or "", "overview": row["overview"] or "",
         "tmdb_id": row["tmdb_id"], "size": row["size"], "has_sub": row["has_sub"],
     }
@@ -251,6 +252,7 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
                 "key": f"{base}:s{season}", "kind": "show", "base": base,
                 "season": season, "title": r["title"],
                 "name_cn": r["name_cn"], "year": r["year"], "poster": r["poster"],
+                "backdrop": r.get("backdrop"),
                 "rating": r["rating"], "genres": r["genres"] or "",
                 "overview": r["overview"] or "", "tmdb_id": r["tmdb_id"],
                 "episodes": [],
@@ -263,6 +265,8 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
             })
             if not show["poster"] and r["poster"]:
                 show["poster"] = r["poster"]
+            if not show["backdrop"] and r.get("backdrop"):
+                show["backdrop"] = r["backdrop"]
 
     entries = movies + list(shows.values())
 

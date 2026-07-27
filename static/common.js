@@ -31,7 +31,9 @@ function toast(msg, ms = 2200) {
 }
 
 function esc(s) {
-  return String(s ?? '').replace(/[&<>"']/g,
+  // 注意：不能用 ??（nullish 合并），小米电视的 WebView 是 Chrome 66 不认，
+  // 整个文件会解析失败导致海报墙空白
+  return String(s == null ? '' : s).replace(/[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
@@ -68,6 +70,36 @@ const IS_SAFARI = /^((?!chrome|chromium|crios|fxios|android).)*safari/i.test(nav
 
 async function playMedia(id) {
   const d = await api(`/api/media/${id}`);
+
+  // 安卓 TV App 内（原生桥存在时）：不开网页播放器，直接全屏内嵌 ExoPlayer
+  // 硬解原片（HEVC/DTS 都走电视/投影自己的解码器），遥控器菜单键切音轨/字幕。
+  // 必须在碰任何播放器 DOM 之前返回——否则网页播放器遮罩会留在原生播放器背后
+  if (window.MediaHubNative && typeof MediaHubNative.play === 'function') {
+    let tvUrl = `${location.origin}/api/stream/${id}`;
+    try {
+      const pl = await api(`/api/media/${id}/playlink`);
+      tvUrl = location.origin + pl.url;
+    } catch (e) {}
+    const tvSubs = (d.subs || []).map((t, i) => ({
+      label: t.label || t.lang || `字幕 ${i + 1}`,
+      url: `${location.origin}/api/subtitle/${id}/${i}`,
+      ext: 'vtt',
+    }));
+    // 剧集的选集列表（原生播放器里「选集」按钮用）；电影/单集为空数组
+    let eps = [];
+    try {
+      if (typeof window.episodesOf === 'function') {
+        eps = (window.episodesOf(id) || []).map((e) => ({
+          id: e.id,
+          label: `S${String(e.season).padStart(2, '0')}E${String(e.episode || '?').padStart(2, '0')}`,
+          name: e.name,
+        }));
+      }
+    } catch (e) {}
+    MediaHubNative.play(tvUrl, d.filename, JSON.stringify(tvSubs), JSON.stringify(eps));
+    return;
+  }
+
   const video = $('#playerVideo');
   if (video.dataset.mid && +video.dataset.mid !== id) savePos(video, +video.dataset.mid);
   video.innerHTML = '';
@@ -142,17 +174,6 @@ async function playMedia(id) {
   video.src = `/api/stream/${id}` + (useTranscode ? `?audio=aac&a=${pref}` : '');
   setupSeekBar(video, id, info.duration || 0);
 
-  // 安卓 TV App 内（原生桥存在时）：提供「外部播放器」通道，
-  // 由电视/投影仪自己的播放器硬解，支持内嵌多音轨/字幕切换
-  const extBtn = $('#btnExternal');
-  if (window.MediaHubNative && typeof MediaHubNative.play === 'function') {
-    extBtn.classList.remove('hidden');
-    extBtn.onclick = () => {
-      MediaHubNative.play(playUrl, d.filename);
-    };
-  } else {
-    extBtn.classList.add('hidden');
-  }
   $('#btnCopyLink').onclick = async () => {
     try { await navigator.clipboard.writeText(playUrl); toast('直链已复制（可粘贴到极米/Infuse 等播放器）'); }
     catch (e) { prompt('复制此直链:', playUrl); }

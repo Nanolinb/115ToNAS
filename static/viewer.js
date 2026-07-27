@@ -101,7 +101,7 @@ async function openDetail(key) {
           .filter(Boolean).join(' · '))}</div>
         <div class="overview">${esc(e.overview || '暂无简介')}</div>
         <div class="detail-actions">
-          ${e.kind === 'movie' ? `<button class="btn primary" data-play="${e.id}">▶ 播放</button>` : ''}
+          ${e.kind === 'movie' ? `<button class="btn primary" data-play="${e.id}"><i class="tri"></i>播放</button>` : ''}
           ${adminBtns}
         </div>
       </div>
@@ -114,7 +114,7 @@ async function openDetail(key) {
         <span class="dot ${ep.has_sub ? 'g' : (ep.sub_status === 'failed' ? 'r' : 'y')}"
               title="${ep.has_sub ? '有字幕' : (ep.sub_status === 'failed' ? '字幕未找到' : '无字幕')}"></span>
         <span class="fsize">${fmtSize(ep.size)}</span>
-        <button class="btn small primary" data-play="${ep.id}">▶</button>
+        <button class="btn small primary" data-play="${ep.id}"><i class="tri"></i></button>
         ${state.adminAuthed ? `<button class="btn small" data-subs="${ep.id}">字幕</button>` : ''}
       </div>`).join('') + `</div>`;
   }

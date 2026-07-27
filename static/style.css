@@ -37,6 +37,8 @@ input, select { font-family: inherit; }
 }
 .tab.active { color: var(--text); background: var(--card); }
 .tab:hover { color: var(--text); }
+/* 顶栏「管理」前的齿轮（内联 SVG，电视字体没有 ⚙ 字形会变豆腐块） */
+.gear-ic { width: 14px; height: 14px; vertical-align: -2px; margin-right: 5px; }
 
 main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .hidden { display: none !important; }
@@ -103,7 +105,7 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 
 /* ---------- 弹窗 ---------- */
 .modal-mask {
-  position: fixed; inset: 0; z-index: 100;
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 100;
   background: rgba(0,0,0,.7); backdrop-filter: blur(4px);
   display: flex; align-items: center; justify-content: center; padding: 16px;
 }
@@ -124,7 +126,7 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 /* 背景图：300px 横条左右顶满弹窗，取封面人物脸部带（约 1/5~1/2 处），底部渐隐 */
 .detail-hero { position: relative; height: 300px; overflow: hidden; border-radius: 14px 14px 0 0; }
 .detail-hero img { width: 100%; height: 100%; object-fit: cover; object-position: center 25%; opacity: .5; }
-.detail-hero .fade { position: absolute; inset: 0; background: linear-gradient(transparent, var(--bg2)); }
+.detail-hero .fade { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: linear-gradient(transparent, var(--bg2)); }
 .detail-flex { display: flex; gap: 18px; margin-top: -60px; position: relative; padding: 0 18px 18px; }
 /* align-items 默认 stretch 会把只有宽度的 img 拉高变形，钉住顶部保持原始宽高比 */
 .detail-flex .dposter { width: 130px; align-self: flex-start; flex-shrink: 0; border-radius: 10px; border: 1px solid var(--border); }
@@ -238,7 +240,7 @@ input.warn::placeholder { color: rgba(224, 93, 93, .75); }
 
 /* ---------- 登录 ---------- */
 .login-mask {
-  position: fixed; inset: 0; z-index: 200; background: var(--bg);
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 200; background: var(--bg);
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .login-box {
@@ -268,3 +270,18 @@ input.warn::placeholder { color: rgba(224, 93, 93, .75); }
   box-shadow: 0 6px 24px rgba(0,0,0,.4); animation: fadein .2s;
 }
 @keyframes fadein { from { opacity: 0; transform: translate(-50%, 8px); } }
+
+/* ---------- 播放三角（CSS 绘制，电视字体没有 ▶ 字形会变豆腐块） ---------- */
+.tri {
+  display: inline-block; width: 0; height: 0; margin-right: .35em;
+  border-left: .68em solid currentColor;
+  border-top: .42em solid transparent; border-bottom: .42em solid transparent;
+}
+.tri:only-child { margin-right: 0; }
+
+/* ---------- TV 遥控器焦点（tvnav.js 驱动，仅 TV App 内出现） ---------- */
+.tv-focus {
+  outline: 3px solid var(--accent2) !important;
+  outline-offset: 2px; border-radius: 10px;
+  box-shadow: 0 0 18px rgba(245,197,24,.45);
+}

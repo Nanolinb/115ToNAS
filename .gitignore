@@ -10,3 +10,11 @@ __pycache__/
 
 # 系统
 .DS_Store
+
+# Android 隔离构建工具链
+.toolchain/
+
+# Android 构建产物
+android/.gradle/
+android/app/build/
+android/build/

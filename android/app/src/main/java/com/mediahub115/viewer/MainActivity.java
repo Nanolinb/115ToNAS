@@ -2,10 +2,8 @@ package com.mediahub115.viewer;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.ActivityNotFoundException;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
 import android.view.KeyEvent;
@@ -16,14 +14,12 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
-import android.widget.Toast;
 
 /**
  * 115影库 · 观影端 TV 壳：
  * - WebView 加载 NAS 上的观影页（海报墙/搜索/过滤）
- * - 播放时通过 JS 桥调起设备自己的播放器（VLC / MX Player / Kodi / 系统播放器），
- *   由电视/投影仪硬件解码，支持内嵌多音轨与字幕切换，画质 = 原文件
- * - 零第三方依赖，APK 体积极小
+ * - 播放走内嵌 ExoPlayer（应用内全屏，电视/投影硬解，可选音轨/字幕，
+ *   音轨解不了自动回落服务端 AAC 转码），不跳外部 App
  */
 public class MainActivity extends Activity {
 
@@ -37,10 +33,17 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // App 在前台时常亮：挡住小米的广告屏保（用户反馈没播视频也很快进屏保广告）。
+        // 退出 App 后交还系统，按系统设置的屏保超时走
+        getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         sp = getSharedPreferences(PREFS, MODE_PRIVATE);
 
         web = new WebView(this);
         setContentView(web);
+        // debug 包开启 WebView 远程调试（chrome://inspect），release 自动关闭
+        if (BuildConfig.DEBUG) {
+            WebView.setWebContentsDebuggingEnabled(true);
+        }
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
@@ -103,34 +106,70 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
-        if (web.canGoBack()) {
-            web.goBack();
-        } else {
-            super.onBackPressed();
-        }
+        // 先让网页逐层关（播放器 → 详情弹窗）；网页没东西可关再弹退出确认，防误退
+        web.evaluateJavascript(
+                "(window.tvBack && window.tvBack()) ? '1' : '0'", v -> {
+                    if (v != null && v.contains("1")) {
+                        return;
+                    }
+                    if (web.canGoBack()) {
+                        web.goBack();
+                        return;
+                    }
+                    new AlertDialog.Builder(this)
+                            .setTitle("退出")
+                            .setMessage("确定退出 115影库？")
+                            .setPositiveButton("退出", (d, w) -> finish())
+                            .setNegativeButton("取消", null)
+                            .show();
+                });
     }
 
     /** 网页通过 window.MediaHubNative 调用的原生能力 */
     public class NativeBridge {
 
         /**
-         * 调起设备上的外部播放器硬解播放。
-         * 外置播放器可自行切换内嵌音轨、加载内嵌/外挂字幕，
-         * 画质与直接插硬盘播放一致（原始码流、原始帧率）。
+         * 内嵌 ExoPlayer 播放（应用内全屏）：电视/投影硬件解码，
+         * 遥控器可选音轨/字幕/选集；音轨解不了自动回落服务端 AAC 转码。
+         * subsJson: [{"label","url","ext"}]，epsJson: [{"id","label","name"}]，可为 null。
          */
         @JavascriptInterface
-        public void play(final String url, final String title) {
+        public void play(final String url, final String title, final String subsJson,
+                         final String epsJson) {
             runOnUiThread(() -> {
-                Intent i = new Intent(Intent.ACTION_VIEW);
-                i.setDataAndType(Uri.parse(url), "video/*");
-                try {
-                    startActivity(Intent.createChooser(i, title));
-                } catch (ActivityNotFoundException e) {
-                    Toast.makeText(MainActivity.this,
-                            "没有找到可用的播放器，请先安装 VLC 或 MX Player",
-                            Toast.LENGTH_LONG).show();
-                }
+                Intent i = new Intent(MainActivity.this, PlayerActivity.class);
+                i.putExtra("url", url);
+                i.putExtra("title", title);
+                i.putExtra("subs", subsJson);
+                i.putExtra("eps", epsJson);
+                // 观影端设了密码时，原生侧请求（换集/字幕/转码流）也要带会话 Cookie
+                String server = sp.getString(KEY_SERVER, DEFAULT_SERVER);
+                i.putExtra("cookie",
+                        android.webkit.CookieManager.getInstance().getCookie(server));
+                startActivity(i);
             });
+        }
+
+        /** 旧版网页缓存可能还在调两参/三参版本，兼容转发。 */
+        @JavascriptInterface
+        public void play(final String url, final String title, final String subsJson) {
+            play(url, title, subsJson, null);
+        }
+
+        @JavascriptInterface
+        public void play(final String url, final String title) {
+            play(url, title, null, null);
+        }
+
+        /** 观影端首页「继续观看」栏：原生播放器的续播存档（pos_<id> → 毫秒） */
+        @JavascriptInterface
+        public String getResume() {
+            try {
+                return new org.json.JSONObject(
+                        getSharedPreferences("resume", MODE_PRIVATE).getAll()).toString();
+            } catch (Exception e) {
+                return "{}";
+            }
         }
     }
 }
