@@ -68,6 +68,25 @@ CREATE TABLE IF NOT EXISTS downloads (
     size       INTEGER DEFAULT 0,
     done_at    INTEGER
 );
+CREATE TABLE IF NOT EXISTS devices (
+    id           TEXT PRIMARY KEY,
+    name         TEXT,
+    platform     TEXT DEFAULT 'android_tv',
+    capabilities TEXT DEFAULT '{}',
+    last_seen    INTEGER
+);
+CREATE TABLE IF NOT EXISTS watch_progress (
+    profile_key TEXT NOT NULL DEFAULT 'default',
+    media_id    INTEGER NOT NULL,
+    device_id   TEXT DEFAULT '',
+    position_ms INTEGER DEFAULT 0,
+    duration_ms INTEGER DEFAULT 0,
+    completed   INTEGER DEFAULT 0,
+    updated_at  INTEGER,
+    PRIMARY KEY(profile_key, media_id)
+);
+CREATE INDEX IF NOT EXISTS idx_progress_updated
+ON watch_progress(profile_key, completed, updated_at DESC);
 """
 
 
@@ -89,6 +108,15 @@ def init():
                 _conn.execute("UPDATE media SET subs=? WHERE id=?", (
                     _json.dumps([{"lang": "zh", "label": "中文字幕",
                                   "path": row["sub_path"]}]), row["id"]))
+        # 下载任务补来源字段：旧任务默认归属 115，为多网盘 Provider 留出边界
+        for table in ("tasks", "downloads"):
+            cols = [r["name"] for r in _conn.execute(f"PRAGMA table_info({table})")]
+            if cols and "provider" not in cols:
+                _conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN provider TEXT DEFAULT '115'")
+            if cols and "account_id" not in cols:
+                _conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN account_id TEXT DEFAULT 'default'")
         _conn.commit()
 
 

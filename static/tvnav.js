@@ -1,16 +1,25 @@
 /* TV 遥控器方向键导航 + Apple TV 风格界面：仅在安卓 TV App 内（原生桥存在时）启用。
  *
- * 首页三段式（参考 Apple TV / 流媒体电视端布局）：
- * - 左栏「继续观看」：原生播放器 SharedPreferences 里的观看进度；一条都没有时填最新录入
- * - 中部 Hero：当前聚焦影片的大标题/简介/播放钮，背景是该片封面的清晰大图+全屏氛围模糊层
- * - 底部海报行：按 全部/电影/剧集 页签过滤的媒体库
+ * 首页采用低成本 Apple TV 式舞台：
+ * - 顶部品牌与分类导航
+ * - 全宽 Hero：清晰横版剧照、标题、简介和播放按钮
+ * - 继续观看横向轨道：服务端进度优先，本机存档兜底
+ * - 影片海报轨道：只使用 transform/opacity 动画
  * 方向键在当前最上层界面内按几何位置移动焦点，确认键点击，
  * 返回键逐层关闭（由原生 MainActivity 调 window.tvBack）。 */
 'use strict';
 
 (function () {
-  if (!window.MediaHubNative) return;
+  const forceTvPreview = /(?:^|[?&])tv=1(?:&|$)/.test(location.search);
+  if (!window.MediaHubNative && !forceTvPreview) return;
   document.body.classList.add('tv-mode');
+  try {
+    const c = MEDIAHUB_DEVICE && MEDIAHUB_DEVICE.capabilities;
+    if ((c && (+c.androidApi <= 23 || +c.height <= 720)) ||
+        (forceTvPreview && window.innerHeight <= 720)) {
+      document.body.classList.add('tv-low-power');
+    }
+  } catch (e) {}
 
   function $(s, r) { return (r || document).querySelector(s); }
   function $all(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
@@ -43,26 +52,42 @@
     return null;
   }
 
-  /* ---------- 氛围背景 + Hero 清晰背景（双层交叉淡入，避免闪黑） ---------- */
+  /* ---------- Hero 双层背景（交叉淡入，避免闪黑） ---------- */
 
   const amb = document.createElement('div');
   amb.id = 'tvAmbient';
   amb.innerHTML = '<div class="amb"></div><div class="amb"></div>';
   document.body.insertBefore(amb, document.body.firstChild);
-  let ambFront = 0;
-
-  function setLayerBg(el, url) {
-    if (!el || !url) return;
-    const f = el._front || 0;
-    const next = el.children[1 - f];
-    const cur = el.children[f];
-    if (!next || !cur) return;
-    if (cur.style.backgroundImage.indexOf(url) >= 0 && cur.classList.contains('on')) return;
-    if (next.style.backgroundImage.indexOf(url) >= 0 && next.classList.contains('on')) return;
-    next.style.backgroundImage = 'url("' + url + '")';
-    next.classList.add('on');
-    cur.classList.remove('on');
-    el._front = 1 - f;
+  function setLayerBg(el, url, fallbackUrl) {
+    if (!el) return;
+    if (!url) {
+      Array.prototype.forEach.call(el.children, function (layer) {
+        if (layer.classList && layer.classList.contains('l')) {
+          layer.style.backgroundImage = '';
+          layer.classList.remove('on');
+        }
+      });
+      el._front = 0;
+      return;
+    }
+    const apply = function (resolved) {
+      const f = el._front || 0;
+      const next = el.children[1 - f];
+      const cur = el.children[f];
+      if (!next || !cur) return;
+      if (cur.style.backgroundImage.indexOf(resolved) >= 0
+          && cur.classList.contains('on')) return;
+      next.style.backgroundImage = 'url("' + resolved + '")';
+      next.classList.add('on');
+      cur.classList.remove('on');
+      el._front = 1 - f;
+    };
+    const probe = new Image();
+    probe.onload = function () { apply(url); };
+    probe.onerror = function () {
+      if (fallbackUrl && fallbackUrl !== url) apply(fallbackUrl);
+    };
+    probe.src = url;
   }
 
   /* ---------- 首页结构 ---------- */
@@ -76,23 +101,29 @@
     home = document.createElement('div');
     home.id = 'tvHome';
     home.innerHTML =
-      '<aside id="tvRail"><div class="rail-title">继续观看</div><div class="rail-list"></div></aside>' +
-      '<section id="tvStage">' +
+      '<header id="tvChrome">' +
+      '  <div class="tv-brand"><span class="tv-brand-mark">A</span><span>Aurora</span></div>' +
       '  <nav id="tvTabs">' +
       '    <span class="tv-tab on" data-tab="">全部</span>' +
       '    <span class="tv-tab" data-tab="movie">电影</span>' +
       '    <span class="tv-tab" data-tab="show">剧集</span>' +
-      '  </nav>' +
+      '  </nav><div class="tv-nas"><i></i> NAS 在线</div>' +
+      '</header>' +
+      '<section id="tvStage">' +
       '  <div id="tvHeroCard">' +
       '    <div class="hc-bg"><div class="l"></div><div class="l"></div><div class="hc-fade"></div></div>' +
       '    <div class="hc-body">' +
-      '      <div class="hc-badge"></div>' +
+      '      <div class="hc-badge">AURORA 精选</div>' +
       '      <h1 class="hc-title"></h1>' +
       '      <div class="hc-meta"></div>' +
       '      <p class="hc-overview"></p>' +
-      '      <button class="hc-watch"><i class="tri"></i>播放</button>' +
+      '      <div class="hc-actions"><button class="hc-watch"><i class="tri"></i> 播放</button>' +
+      '      <button class="hc-detail">更多信息</button></div>' +
       '    </div>' +
       '  </div>' +
+      '  <div class="tv-row-head"><h2 id="continueTitle">继续观看</h2></div>' +
+      '  <div id="tvContinue"></div>' +
+      '  <div class="tv-row-head"><h2>媒体库</h2><span class="tv-count"></span></div>' +
       '  <div id="tvShelf"></div>' +
       '</section>';
     const page = $('#page-library');
@@ -102,27 +133,36 @@
       tab = t.dataset.tab;
       $all('.tv-tab', home).forEach((x) => x.classList.toggle('on', x === t));
       renderShelf();
-      renderHero(shelfItems()[0] || null);
+      renderHero(firstHeroItem());
     }));
     $('.hc-watch', home).addEventListener('click', () => {
       const e = libItem(featuredKey);
       if (!e) return;
       if (e.kind === 'movie') playMedia(e.id); else openDetail(e.key);
     });
-    renderRail();
+    $('.hc-detail', home).addEventListener('click', () => {
+      const e = libItem(featuredKey);
+      if (e) openDetail(e.key);
+    });
+    renderContinue();
     renderShelf();
-    renderHero(shelfItems()[0] || null);
+    renderHero(firstHeroItem());
   }
 
   function shelfItems() {
     return lib().filter((e) => !tab || e.kind === tab);
   }
 
+  function firstHeroItem() {
+    const items = shelfItems();
+    return items.filter((e) => e.backdrop || e.poster)[0] || items[0] || null;
+  }
+
   function mediaIdOf(e) {
     return e.kind === 'movie' ? e.id : ((e.episodes || [])[0] || {}).id;
   }
 
-  /* ---------- 左栏：继续观看（原生播放进度），空则填最新录入 ---------- */
+  /* ---------- 继续观看：服务端进度优先，本机存档兜底 ---------- */
 
   function resumeMap() {
     try {
@@ -139,40 +179,65 @@
     return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(ss).padStart(2, '0');
   }
 
-  function renderRail() {
-    const list = $('.rail-list', home);
+  function renderContinue() {
+    const list = $('#tvContinue', home);
     if (!list) return;
-    const resume = resumeMap();
     const rows = [];
-    Object.keys(resume).forEach((k) => {
-      const id = +k.replace(/^pos_/, '');
-      const hit = itemByMediaId(id);
-      if (hit && resume[k] > 0) rows.push({ item: hit.item, ep: hit.ep, id, pos: resume[k] });
-    });
-    $('.rail-title', home).textContent = rows.length ? '继续观看' : '最新录入';
-    if (!rows.length) {
-      lib().slice(0, 6).forEach((e) => rows.push({ item: e, ep: null, id: mediaIdOf(e), pos: 0 }));
-    }
-    list.innerHTML = rows.slice(0, 6).map((r) => {
-      const e = r.item;
-      const sub = r.ep
-        ? 'S' + String(r.ep.season).padStart(2, '0') + 'E' + String(r.ep.episode || '?').padStart(2, '0')
-        : (e.year || '');
-      const right = r.pos > 0 ? '看到 ' + fmtPos(r.pos) : (e.kind === 'show' ? e.count + ' 集' : '电影');
-      return '<div class="rail-row" data-key="' + esc(e.key) + '" data-mid="' + r.id + '">' +
-        '<img src="' + (e.poster ? '/api/poster/' + encodeURIComponent(e.poster) : '/api/poster/_none') + '">' +
-        '<div class="rr-info"><div class="rr-title">' + esc(e.name_cn || e.title) + '</div>' +
-        '<div class="rr-sub">' + esc(sub) + '</div>' +
-        '<div class="rr-pos">' + esc(right) + '</div></div></div>';
-    }).join('');
-    $all('.rail-row', list).forEach((r) => r.addEventListener('click', () => {
-      // 继续观看直接起播（原生播放器自己会问续播/从头）；无进度的打开详情
-      if (r.querySelector('.rr-pos').textContent.indexOf('看到') === 0) {
-        playMedia(+r.dataset.mid);
-      } else {
-        openDetail(r.dataset.key);
+    const appendLocal = function () {
+      const resume = resumeMap();
+      Object.keys(resume).forEach((k) => {
+        const id = +k.replace(/^pos_/, '');
+        const hit = itemByMediaId(id);
+        if (hit && resume[k] > 0
+            && !rows.some((r) => r.id === id)) {
+          rows.push({ item: hit.item, ep: hit.ep, id: id,
+            pos: resume[k], duration: 0 });
+        }
+      });
+    };
+    const draw = function () {
+      $('#continueTitle', home).textContent = rows.length ? '继续观看' : '最近添加';
+      if (!rows.length) {
+        lib().slice(0, 5).forEach((e) => rows.push({
+          item: e, ep: null, id: mediaIdOf(e), pos: 0, duration: 0
+        }));
       }
-    }));
+      list.innerHTML = rows.slice(0, 6).map((r) => {
+        const e = r.item;
+        const sub = r.ep
+          ? 'S' + String(r.ep.season).padStart(2, '0') + 'E'
+            + String(r.ep.episode || '?').padStart(2, '0')
+          : (e.year || (e.kind === 'show' ? e.count + ' 集' : '电影'));
+        const pct = r.duration > 0 ? Math.min(100, Math.round(r.pos / r.duration * 100)) : 0;
+        const pic = e.backdrop || e.poster;
+        return '<div class="continue-card" data-key="' + esc(e.key)
+          + '" data-mid="' + r.id + '" data-resume="' + (r.pos > 0 ? '1' : '') + '">' +
+          '<div class="continue-art"><img src="'
+          + (pic ? '/api/poster/' + encodeURIComponent(pic) : '/api/poster/_none') + '">' +
+          '<span class="continue-play">▶</span>' +
+          (pct ? '<span class="continue-progress"><i style="width:' + pct + '%"></i></span>' : '') +
+          '</div><div class="continue-copy"><strong>' + esc(e.name_cn || e.title)
+          + '</strong><span>' + esc(r.pos > 0 ? sub + ' · 看到 ' + fmtPos(r.pos) : sub)
+          + '</span></div></div>';
+      }).join('');
+      $all('.continue-card', list).forEach((r) => r.addEventListener('click', () => {
+        if (r.dataset.resume === '1') playMedia(+r.dataset.mid);
+        else openDetail(r.dataset.key);
+      }));
+    };
+
+    api('/api/progress?limit=12').then((data) => {
+      (data.items || []).forEach((p) => {
+        const hit = itemByMediaId(+p.media_id);
+        if (hit) rows.push({ item: hit.item, ep: hit.ep, id: +p.media_id,
+          pos: +p.position_ms || 0, duration: +p.duration_ms || 0 });
+      });
+      appendLocal();
+      draw();
+    }).catch(() => {
+      appendLocal();
+      draw();
+    });
   }
 
   /* ---------- 底部海报行 ---------- */
@@ -187,6 +252,7 @@
       (e.kind === 'show' ? '<span class="tbadge">' + e.count + '集</span>' : '') +
       '</div><div class="ttitle">' + esc(e.name_cn || e.title) + '</div></div>'
     ).join('');
+    $('.tv-count', home).textContent = shelfItems().length + ' 个项目';
     $all('.tcard', shelf).forEach((c) => c.addEventListener('click', () => openDetail(c.dataset.key)));
   }
 
@@ -195,7 +261,8 @@
   function renderHero(e) {
     if (!home || !e) return;
     featuredKey = e.key;
-    $('.hc-badge', home).textContent = e.kind === 'show' ? '剧集 · 共 ' + e.count + ' 集' : '电影';
+    $('.hc-badge', home).textContent = 'AURORA 精选 · '
+      + (e.kind === 'show' ? '剧集' : '电影');
     $('.hc-title', home).textContent = e.name_cn || e.title;
     $('.hc-meta', home).textContent = [e.year, e.genres, e.rating ? '★ ' + e.rating : '']
       .filter(Boolean).join(' · ');
@@ -203,9 +270,10 @@
     // 大背景优先用 TMDB 横版剧照（backdrop），没有再回退竖版海报
     const pic = e.backdrop || e.poster;
     const url = pic ? '/api/poster/' + encodeURIComponent(pic) : '';
-    setLayerBg(amb, url);
+    const fallback = e.poster ? '/api/poster/' + encodeURIComponent(e.poster) : '';
+    setLayerBg(amb, url, fallback);
     const hcBg = $('.hc-bg', home);
-    if (url) setLayerBg(hcBg, url);
+    setLayerBg(hcBg, url, fallback);
   }
 
   /* ---------- 焦点管理 ---------- */
@@ -222,7 +290,7 @@
       return $all('button, input, select, [data-pick], [data-confirm]', top).filter(isVis);
     }
     if (home) {
-      return $all('.rail-row, .tv-tab, .hc-watch, .tcard', home).filter(isVis);
+      return $all('.tv-tab, .hc-watch, .hc-detail, .continue-card, .tcard', home).filter(isVis);
     }
     return $all('#libGrid .card, .toolbar select, .toolbar input').filter(isVis);
   }
@@ -232,25 +300,24 @@
        且它会把所有可滚动祖先一起滚，容易把页面带偏） */
 
   let shelfAnim = null;
-  function scrollShelfTo(el) {
-    const shelf = $('#tvShelf');
-    if (!shelf) return;
-    const sr = shelf.getBoundingClientRect();
+  function scrollRowTo(el, row) {
+    if (!row) return;
+    const sr = row.getBoundingClientRect();
     const r = el.getBoundingClientRect();
     const margin = 40; // 边缘留白：聚焦放大后不贴边，也给下一张露出半截作提示
-    let target = shelf.scrollLeft;
+    let target = row.scrollLeft;
     if (r.left < sr.left + margin) target -= (sr.left + margin) - r.left;
     else if (r.right > sr.right - margin) target += r.right - (sr.right - margin);
-    const maxScroll = shelf.scrollWidth - shelf.clientWidth;
+    const maxScroll = row.scrollWidth - row.clientWidth;
     if (target < 0) target = 0;
     if (target > maxScroll) target = maxScroll;
-    if (target === shelf.scrollLeft) return;
+    if (target === row.scrollLeft) return;
     if (shelfAnim) cancelAnimationFrame(shelfAnim);
-    const from = shelf.scrollLeft, delta = target - from, t0 = Date.now(), dur = 180;
+    const from = row.scrollLeft, delta = target - from, t0 = Date.now(), dur = 180;
     const step = function () {
       const t = Math.min(1, (Date.now() - t0) / dur);
       const ease = 1 - Math.pow(1 - t, 3); // easeOutCubic
-      shelf.scrollLeft = from + delta * ease;
+      row.scrollLeft = from + delta * ease;
       shelfAnim = t < 1 ? requestAnimationFrame(step) : null;
     };
     step();
@@ -260,14 +327,14 @@
     $all('.tv-focus').forEach((x) => x.classList.remove('tv-focus'));
     if (!el) return;
     el.classList.add('tv-focus');
-    if (el.classList.contains('tcard')) {
-      scrollShelfTo(el);
+    if (el.classList.contains('tcard') || el.classList.contains('continue-card')) {
+      scrollRowTo(el, el.classList.contains('tcard') ? $('#tvShelf') : $('#tvContinue'));
     } else {
       try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { el.scrollIntoView(false); }
     }
     // 聚焦海报/续看行 → Hero 与氛围背景联动
     const key = el.dataset ? el.dataset.key : null;
-    if (key && (el.classList.contains('tcard') || el.classList.contains('rail-row'))) {
+    if (key && (el.classList.contains('tcard') || el.classList.contains('continue-card'))) {
       const e = libItem(key);
       if (e) renderHero(e);
     }
@@ -349,8 +416,10 @@
       const items = currentItems();
       const cur = focused();
       if (items.length && (!cur || items.indexOf(cur) < 0)) {
-        const primary = items.filter((el) => el.classList.contains('primary'))[0];
-        setFocus(primary || items[0]);
+        const preferred = home && !isVis($('#detailMask'))
+          ? ($('.continue-card', home) || $('.hc-watch', home))
+          : items.filter((el) => el.classList.contains('primary'))[0];
+        setFocus(preferred || items[0]);
       }
     }, 0);
   });

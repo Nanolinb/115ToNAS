@@ -45,12 +45,15 @@ import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * 内嵌播放器：ExoPlayer 硬件解码（电视/投影 MediaCodec 可解 HEVC，
@@ -83,6 +86,9 @@ public class PlayerActivity extends Activity {
     private String posKey;        // 续播存档键（按影片 id，playlink 令牌每次变，不能按 URL）
     private String mediaId;       // 影片 id（AAC 回退/切集时用）
     private String apiBase;       // 服务器 origin（playUrl 里 /api/ 之前的部分）
+    private String deviceId;
+    private final ExecutorService progressExecutor =
+            Executors.newSingleThreadExecutor();
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     // 自动隐藏菜单条时把焦点交回播放画面：否则焦点残留在看不见的按钮上，
@@ -110,6 +116,7 @@ public class PlayerActivity extends Activity {
         subsJson = getIntent().getStringExtra("subs");
         epsJson = getIntent().getStringExtra("eps");
         cookie = getIntent().getStringExtra("cookie");
+        deviceId = getIntent().getStringExtra("device_id");
         int apiIdx = url == null ? -1 : url.indexOf("/api/");
         apiBase = apiIdx > 0 ? url.substring(0, apiIdx) : "";
 
@@ -497,8 +504,38 @@ public class PlayerActivity extends Activity {
 
     /** 起播入口：有续播存档先问，没有就从零开始 */
     private void startPlayback() {
-        long saved = posKey == null ? 0
+        final long localSaved = posKey == null ? 0
                 : getSharedPreferences(PREFS, MODE_PRIVATE).getLong(posKey, 0);
+        if (mediaId == null || apiBase.isEmpty()) {
+            startWithResume(localSaved);
+            return;
+        }
+        progressExecutor.execute(() -> {
+            long serverSaved = 0;
+            boolean serverCompleted = false;
+            try {
+                JSONObject p = new JSONObject(
+                        httpGet(apiBase + "/api/progress/" + mediaId));
+                serverCompleted = p.optInt("completed", 0) == 1;
+                if (!serverCompleted) {
+                    serverSaved = p.optLong("position_ms", 0);
+                }
+            } catch (Exception ignore) {
+                // 服务端不可达时继续使用本机续播，不阻断播放。
+            }
+            final boolean completed = serverCompleted;
+            final long saved = completed ? 0 : Math.max(localSaved, serverSaved);
+            runOnUiThread(() -> {
+                if (completed && posKey != null) {
+                    getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                            .remove(posKey).apply();
+                }
+                startWithResume(saved);
+            });
+        });
+    }
+
+    private void startWithResume(long saved) {
         if (saved > 30_000) {
             askResume(saved);
         } else {
@@ -539,12 +576,52 @@ public class PlayerActivity extends Activity {
         SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
         if (dur > 0 && dur - pos <= 60_000) {
             e.remove(posKey);
+            postProgress(pos, dur, true);
         } else if (pos > 30_000) {
             e.putLong(posKey, pos);
+            postProgress(pos, dur, false);
         } else {
             return;
         }
         e.apply();
+    }
+
+    private void postProgress(final long pos, final long dur,
+                              final boolean completed) {
+        if (mediaId == null || apiBase.isEmpty()) {
+            return;
+        }
+        final String id = mediaId;
+        progressExecutor.execute(() -> {
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(
+                        apiBase + "/api/progress/" + id).openConnection();
+                c.setConnectTimeout(3000);
+                c.setReadTimeout(3000);
+                c.setRequestMethod("POST");
+                c.setDoOutput(true);
+                c.setRequestProperty("Content-Type", "application/json");
+                if (cookie != null && !cookie.isEmpty()) {
+                    c.setRequestProperty("Cookie", cookie);
+                }
+                JSONObject body = new JSONObject();
+                body.put("position_ms", pos);
+                body.put("duration_ms", Math.max(0, dur));
+                body.put("completed", completed);
+                body.put("device_id", deviceId == null ? "" : deviceId);
+                byte[] raw = body.toString().getBytes("UTF-8");
+                c.setFixedLengthStreamingMode(raw.length);
+                OutputStream out = c.getOutputStream();
+                out.write(raw);
+                out.close();
+                c.getResponseCode();
+            } catch (Exception ignore) {
+                // 进度同步是旁路能力，本地存档始终保留。
+            } finally {
+                if (c != null) c.disconnect();
+            }
+        });
     }
 
     /**
@@ -742,6 +819,7 @@ public class PlayerActivity extends Activity {
             player.release();
             player = null;
         }
+        progressExecutor.shutdownNow();
         super.onDestroy();
     }
 }

@@ -5,8 +5,12 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.os.Bundle;
+import android.os.Build;
 import android.text.InputType;
+import android.util.DisplayMetrics;
 import android.view.KeyEvent;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
@@ -14,6 +18,13 @@ import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
 import android.widget.EditText;
+
+import org.json.JSONObject;
+import org.json.JSONArray;
+
+import java.util.HashSet;
+import java.util.Set;
+import java.util.UUID;
 
 /**
  * 115影库 · 观影端 TV 壳：
@@ -25,10 +36,20 @@ public class MainActivity extends Activity {
 
     private static final String PREFS = "mediahub";
     private static final String KEY_SERVER = "server";
+    private static final String KEY_DEVICE_ID = "device_id";
     private static final String DEFAULT_SERVER = "http://192.168.1.107:8115";
 
     private WebView web;
     private SharedPreferences sp;
+
+    private String deviceId() {
+        String id = sp.getString(KEY_DEVICE_ID, "");
+        if (id.isEmpty()) {
+            id = "tv-" + UUID.randomUUID().toString();
+            sp.edit().putString(KEY_DEVICE_ID, id).apply();
+        }
+        return id;
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -146,6 +167,7 @@ public class MainActivity extends Activity {
                 String server = sp.getString(KEY_SERVER, DEFAULT_SERVER);
                 i.putExtra("cookie",
                         android.webkit.CookieManager.getInstance().getCookie(server));
+                i.putExtra("device_id", deviceId());
                 startActivity(i);
             });
         }
@@ -167,6 +189,48 @@ public class MainActivity extends Activity {
             try {
                 return new org.json.JSONObject(
                         getSharedPreferences("resume", MODE_PRIVATE).getAll()).toString();
+            } catch (Exception e) {
+                return "{}";
+            }
+        }
+
+        /** 首次进入时由网页上报服务端，供播放策略与性能降级使用。 */
+        @JavascriptInterface
+        public String getDeviceProfile() {
+            try {
+                DisplayMetrics dm = new DisplayMetrics();
+                getWindowManager().getDefaultDisplay().getRealMetrics(dm);
+                JSONObject caps = new JSONObject();
+                caps.put("manufacturer", Build.MANUFACTURER);
+                caps.put("model", Build.MODEL);
+                caps.put("androidApi", Build.VERSION.SDK_INT);
+                caps.put("width", dm.widthPixels);
+                caps.put("height", dm.heightPixels);
+                caps.put("refreshRate",
+                        getWindowManager().getDefaultDisplay().getRefreshRate());
+                Set<String> mimeSet = new HashSet<>();
+                MediaCodecInfo[] codecs = new MediaCodecList(
+                        MediaCodecList.ALL_CODECS).getCodecInfos();
+                for (MediaCodecInfo codec : codecs) {
+                    if (codec.isEncoder()) continue;
+                    for (String type : codec.getSupportedTypes()) {
+                        mimeSet.add(type.toLowerCase());
+                    }
+                }
+                JSONArray decoderMimes = new JSONArray();
+                for (String mime : mimeSet) decoderMimes.put(mime);
+                caps.put("decoderMimes", decoderMimes);
+                if (Build.VERSION.SDK_INT >= 26
+                        && WebView.getCurrentWebViewPackage() != null) {
+                    caps.put("webView",
+                            WebView.getCurrentWebViewPackage().versionName);
+                }
+                JSONObject out = new JSONObject();
+                out.put("id", deviceId());
+                out.put("name", Build.MANUFACTURER + " " + Build.MODEL);
+                out.put("platform", "android_tv");
+                out.put("capabilities", caps);
+                return out.toString();
             } catch (Exception e) {
                 return "{}";
             }
