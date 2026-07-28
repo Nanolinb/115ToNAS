@@ -2,8 +2,13 @@
  *
  * 首页三段式（参考 Apple TV / 流媒体电视端布局）：
  * - 左栏「继续观看」：原生播放器 SharedPreferences 里的观看进度；一条都没有时填最新录入
- * - 中部 Hero：当前聚焦影片的大标题/简介/播放钮，背景是该片封面的清晰大图+全屏氛围模糊层
- * - 底部海报行：按 全部/电影/剧集 页签过滤的媒体库
+ * - 中部 Hero：当前聚焦影片的大标题/简介/播放钮，背景是该片封面的清晰大图+全屏氛围模糊层，
+ *   背景层向下延伸出卡片 50% 并渐隐，当作整个舞台的背景
+ * - 底部海报行「最近更新」：最新录入的 8 条（近 7 天看过的隐藏）
+ * - 顶部过滤器：类型/题材/年份三个胶囊，确认键弹纵向选项浮层，纯方向键+确认+返回操作
+ *   （不依赖 WebView 原生 select；对最近更新与浏览层两排同时生效）
+ * - 浏览层：焦点在底部海报行按「下」打开 #tvBrowse（电影/剧集两排全量列表，
+ *   滑动渐显进场、浮在 Hero 之上透出背景大图；上排再按「上」或返回键反向收层）
  * 方向键在当前最上层界面内按几何位置移动焦点，确认键点击，
  * 返回键逐层关闭（由原生 MainActivity 调 window.tvBack）。 */
 'use strict';
@@ -68,7 +73,8 @@
   /* ---------- 首页结构 ---------- */
 
   let home = null;
-  let tab = ''; // ''=全部 movie=电影 show=剧集
+  // 顶部过滤器：类型 ''=全部 / movie / show；题材 ''=全部；年份 0=全部
+  const flt = { kind: '', genre: '', year: 0 };
   let featuredKey = null;
 
   function buildHome() {
@@ -79,10 +85,11 @@
       '<aside id="tvRail"><div class="rail-title">继续观看</div><div class="rail-list"></div></aside>' +
       '<section id="tvStage">' +
       '  <nav id="tvTabs">' +
-      '    <span class="tv-tab on" data-tab="">全部</span>' +
-      '    <span class="tv-tab" data-tab="movie">电影</span>' +
-      '    <span class="tv-tab" data-tab="show">剧集</span>' +
+      '    <span class="tv-tab tv-filter" data-flt="kind"></span>' +
+      '    <span class="tv-tab tv-filter" data-flt="genre"></span>' +
+      '    <span class="tv-tab tv-filter" data-flt="year"></span>' +
       '  </nav>' +
+      '  <div id="tvFltPop"></div>' +
       '  <div id="tvHeroCard">' +
       '    <div class="hc-bg"><div class="l"></div><div class="l"></div><div class="hc-fade"></div></div>' +
       '    <div class="hc-body">' +
@@ -93,29 +100,144 @@
       '      <button class="hc-watch"><i class="tri"></i>播放</button>' +
       '    </div>' +
       '  </div>' +
+      '  <div id="tvBrowse"></div>' +
+      '  <div class="shelf-title">最近更新</div>' +
       '  <div id="tvShelf"></div>' +
       '</section>';
     const page = $('#page-library');
     page.parentNode.insertBefore(home, page);
 
-    $all('.tv-tab', home).forEach((t) => t.addEventListener('click', () => {
-      tab = t.dataset.tab;
-      $all('.tv-tab', home).forEach((x) => x.classList.toggle('on', x === t));
-      renderShelf();
-      renderHero(shelfItems()[0] || null);
-    }));
+    $all('.tv-filter', home).forEach((c) => c.addEventListener('click', () => openFltPop(c.dataset.flt)));
+    updateCapsules();
     $('.hc-watch', home).addEventListener('click', () => {
       const e = libItem(featuredKey);
       if (!e) return;
       if (e.kind === 'movie') playMedia(e.id); else openDetail(e.key);
     });
     renderRail();
-    renderShelf();
-    renderHero(shelfItems()[0] || null);
+    renderShelf(() => renderHero(shelfItems()[0] || null));
   }
 
+  /* ---------- 底部海报行：最新录入 8 条，近 7 天看过的隐藏 ---------- */
+
+  // 近 7 天有观看记录（updated_at）的 media id 集合；null=未加载，拉取失败退回 {}（不过滤）
+  let recentWatched = null;
+  function loadRecentWatched(cb) {
+    if (recentWatched) { cb(); return; }
+    fetch('/api/progress?full=1').then((r) => (r.ok ? r.json() : null)).then((m) => {
+      const set = {};
+      const cutoff = Math.floor(Date.now() / 1000) - 7 * 86400;
+      if (m) {
+        Object.keys(m).forEach((id) => {
+          const v = m[id];
+          if (v && Number(v.ts) >= cutoff) set[id] = true;
+        });
+      }
+      recentWatched = set;
+      cb();
+    }).catch(() => { recentWatched = {}; cb(); });
+  }
+
+  // 电影看自身 media id，剧集看任意一集的 id
+  function isRecentWatched(e) {
+    if (!recentWatched) return false;
+    if (e.kind === 'movie') return !!recentWatched[e.id];
+    const eps = e.episodes || [];
+    for (let i = 0; i < eps.length; i++) if (recentWatched[eps[i].id]) return true;
+    return false;
+  }
+
+  // 题材/年份过滤（类型由调用方各自处理：shelf 套在 8 条规则后，浏览层按排显隐）
+  function passGenreYear(e) {
+    if (flt.genre && (e.genres || '').split(',').indexOf(flt.genre) < 0) return false;
+    if (flt.year && e.year !== flt.year) return false;
+    return true;
+  }
+
+  // 录入时间倒序取最新 8 条（剔除近一周看过的），再套 类型/题材/年份 过滤
   function shelfItems() {
-    return lib().filter((e) => !tab || e.kind === tab);
+    const items = lib().filter((e) => !isRecentWatched(e));
+    items.sort((a, b) => (b.added || 0) - (a.added || 0));
+    return items.slice(0, 8).filter((e) =>
+      (!flt.kind || e.kind === flt.kind) && passGenreYear(e));
+  }
+
+  /* ---------- 顶部过滤器：类型/题材/年份胶囊 + 纵向选项浮层 ---------- */
+
+  // 选项清单：题材/年份从库条目实时收集（分割符与 web 端 viewer.js 同口径：逗号分割、年份倒序）
+  function fltOptions(kind) {
+    if (kind === 'kind') return [['', '全部'], ['movie', '电影'], ['show', '剧集']];
+    const set = {};
+    if (kind === 'genre') {
+      lib().forEach((e) => (e.genres || '').split(',').filter(Boolean)
+        .forEach((g) => { set[g] = true; }));
+      return [['', '全部题材']].concat(Object.keys(set).sort().map((g) => [g, g]));
+    }
+    lib().forEach((e) => { if (e.year) set[e.year] = true; });
+    return [['0', '全部年份']].concat(
+      Object.keys(set).map(Number).sort((a, b) => b - a).map((y) => [String(y), String(y)]));
+  }
+
+  function fltCapsuleText(kind) {
+    if (kind === 'kind') return '类型：' + (flt.kind === 'movie' ? '电影' : flt.kind === 'show' ? '剧集' : '全部');
+    if (kind === 'genre') return '题材：' + (flt.genre || '全部');
+    return '年份：' + (flt.year || '全部');
+  }
+
+  function updateCapsules() {
+    $all('.tv-filter', home).forEach((c) => {
+      const k = c.dataset.flt;
+      // 不下拼 ▾ 字符：电视字体缺这个字形会显示方框 x，下拉指示用 CSS 三角（::after）
+      c.textContent = fltCapsuleText(k);
+      c.classList.toggle('on',
+        k === 'kind' ? !!flt.kind : k === 'genre' ? !!flt.genre : !!flt.year);
+    });
+  }
+
+  // 选项浮层：胶囊正下方的纵向列表；打开时焦点锁在浮层内（见 currentItems），
+  // 方向键上下移动、确认选择、返回关闭
+  let fltPopOpen = false;
+  let fltPopKind = null;
+
+  function openFltPop(kind) {
+    if (fltPopOpen || !home) return;
+    fltPopKind = kind;
+    const pop = $('#tvFltPop', home);
+    const curVal = String(flt[kind]);
+    pop.innerHTML = fltOptions(kind).map((o) =>
+      '<div class="fp-opt' + (String(o[0]) === curVal ? ' on' : '') +
+      '" data-val="' + esc(o[0]) + '">' + esc(o[1]) + '</div>'
+    ).join('');
+    // 定位到对应胶囊正下方
+    const cap = $('.tv-filter[data-flt="' + kind + '"]', home);
+    const sr = $('#tvStage', home).getBoundingClientRect();
+    const cr = cap.getBoundingClientRect();
+    pop.style.left = Math.max(0, cr.left - sr.left) + 'px';
+    pop.style.top = (cr.bottom - sr.top + 6) + 'px';
+    fltPopOpen = true;
+    pop.classList.add('on');
+    void pop.offsetWidth;
+    pop.classList.add('in');
+    $all('.fp-opt', pop).forEach((o) => o.addEventListener('click', () => applyFlt(o.dataset.val)));
+    setFocus($('.fp-opt.on', pop) || $('.fp-opt', pop));
+  }
+
+  function closeFltPop() {
+    if (!fltPopOpen) return;
+    fltPopOpen = false;
+    const pop = $('#tvFltPop', home);
+    pop.classList.remove('in');
+    setTimeout(() => { if (!fltPopOpen) pop.classList.remove('on'); }, 240);
+    setFocus($('.tv-filter[data-flt="' + fltPopKind + '"]', home));
+  }
+
+  function applyFlt(val) {
+    if (fltPopKind === 'year') flt.year = +val || 0;
+    else flt[fltPopKind] = val;
+    updateCapsules();
+    closeFltPop();
+    renderShelf();
+    rebuildBrowse(); // 浏览层开着时重建两排（焦点保持不飞出）
   }
 
   function mediaIdOf(e) {
@@ -195,19 +317,100 @@
     }));
   }
 
-  /* ---------- 底部海报行 ---------- */
+  /* ---------- 海报卡：底部最新行与浏览层共用 ---------- */
 
-  function renderShelf() {
-    const shelf = $('#tvShelf', home);
-    if (!shelf) return;
-    shelf.innerHTML = shelfItems().map((e) =>
-      '<div class="tcard" data-key="' + esc(e.key) + '">' +
+  function tcardHtml(e) {
+    return '<div class="tcard" data-key="' + esc(e.key) + '">' +
       '<div class="tp-wrap"><img loading="lazy" src="' +
       (e.poster ? '/api/poster/' + encodeURIComponent(e.poster) : '/api/poster/_none') + '">' +
       (e.kind === 'show' ? '<span class="tbadge">' + e.count + '集</span>' : '') +
-      '</div><div class="ttitle">' + esc(e.name_cn || e.title) + '</div></div>'
+      '</div><div class="ttitle">' + esc(e.name_cn || e.title) + '</div></div>';
+  }
+
+  function bindTcards(root) {
+    $all('.tcard', root).forEach((c) => c.addEventListener('click', () => openDetail(c.dataset.key)));
+  }
+
+  /* ---------- 底部海报行 ---------- */
+
+  function renderShelf(after) {
+    const shelf = $('#tvShelf', home);
+    if (!shelf) return;
+    loadRecentWatched(() => {
+      shelf.innerHTML = shelfItems().map(tcardHtml).join('');
+      bindTcards(shelf);
+      if (after) after();
+    });
+  }
+
+  /* ---------- 浏览层：两排（电影/剧集）全量分类浏览，浮在 Hero 上 ---------- */
+
+  let browseOpen = false;
+  let lastShelfKey = null; // 打开浏览层前 shelf 上的焦点卡，关闭后焦点回到它
+
+  // 题材/年份过滤两排都生效；类型过滤在 buildBrowseRows 里按排显隐
+  function browseItems(kind) {
+    return lib().filter((e) => e.kind === kind && passGenreYear(e))
+      .sort((a, b) => (b.added || 0) - (a.added || 0));
+  }
+
+  function buildBrowseRows() {
+    const b = $('#tvBrowse', home);
+    b.innerHTML = [['movie', '电影'], ['show', '剧集']].map((r) =>
+      '<div class="br-row"' + (flt.kind && flt.kind !== r[0] ? ' style="display:none"' : '') + '>' +
+      '<div class="br-title">' + r[1] + '</div>' +
+      '<div class="br-strip">' + browseItems(r[0]).map(tcardHtml).join('') + '</div></div>'
     ).join('');
-    $all('.tcard', shelf).forEach((c) => c.addEventListener('click', () => openDetail(c.dataset.key)));
+    bindTcards(b);
+  }
+
+  // 第一条可见排的第一张卡（类型过滤可能藏掉电影排）
+  function firstBrowseCard() {
+    const rows = $all('.br-row', $('#tvBrowse', home)).filter(isVis);
+    let target = null;
+    for (let i = 0; i < rows.length && !target; i++) target = $('.tcard', rows[i]);
+    return target;
+  }
+
+  function openBrowse() {
+    if (browseOpen || !home) return;
+    const cur = focused();
+    lastShelfKey = (cur && cur.dataset) ? cur.dataset.key : null;
+    browseOpen = true;
+    buildBrowseRows();
+    const b = $('#tvBrowse', home);
+    $('#tvStage', home).classList.add('browse-open');
+    // 滑动渐显进场：先 display:block 占位，强制 reflow 后再加终态类触发 transition
+    b.classList.add('on');
+    void b.offsetWidth;
+    b.classList.add('in');
+    // 焦点固定落在第一排第一张卡（hero 背景随之切到该片）
+    setFocus(firstBrowseCard());
+  }
+
+  // 过滤器改变时重建两排：优先焦点留在同 key 卡，卡没了回第一排第一张
+  function rebuildBrowse() {
+    if (!browseOpen || !home) return;
+    const cur = focused();
+    const key = cur && cur.dataset ? cur.dataset.key : null;
+    buildBrowseRows();
+    let target = key ? $('.tcard[data-key="' + key + '"]', $('#tvBrowse', home)) : null;
+    if (!target || !isVis(target)) target = firstBrowseCard();
+    setFocus(target);
+  }
+
+  function closeBrowse() {
+    if (!browseOpen || !home) return;
+    browseOpen = false;
+    $('#tvStage', home).classList.remove('browse-open');
+    // 反向播放进场动画（下滑+淡出），动画结束后再 display:none
+    const b = $('#tvBrowse', home);
+    b.classList.remove('in');
+    setTimeout(() => { if (!browseOpen) b.classList.remove('on'); }, 360);
+    const shelf = $('#tvShelf', home);
+    let target = lastShelfKey && shelf ? $('.tcard[data-key="' + lastShelfKey + '"]', shelf) : null;
+    if (!target && shelf) target = $('.tcard', shelf);
+    setFocus(target);
   }
 
   /* ---------- 中部 Hero ---------- */
@@ -245,6 +448,10 @@
           (el.classList.contains('ep-row') || !el.closest('.ep-row')));
     }
     if (home) {
+      // 过滤器浮层打开时只导航浮层选项
+      if (fltPopOpen) return $all('.fp-opt', $('#tvFltPop', home)).filter(isVis);
+      // 浏览层打开时只导航两排卡片（tabs/播放钮此时不可见，不参与焦点）
+      if (browseOpen) return $all('.tcard', $('#tvBrowse', home)).filter(isVis);
       return $all('.rail-row, .tv-tab, .hc-watch, .tcard', home).filter(isVis);
     }
     return $all('#libGrid .card, .toolbar select, .toolbar input').filter(isVis);
@@ -256,7 +463,8 @@
 
   let shelfAnim = null;
   function scrollShelfTo(el) {
-    const shelf = $('#tvShelf');
+    // 泛化：滚动卡片所在的行容器（底部最新行 #tvShelf 或浏览层的 .br-strip）
+    const shelf = el.closest('#tvShelf, .br-strip');
     if (!shelf) return;
     const sr = shelf.getBoundingClientRect();
     const r = el.getBoundingClientRect();
@@ -302,6 +510,24 @@
   }
 
   function move(dir) {
+    // 焦点在底部最新行的海报上按「下」→ 打开浏览层
+    if (dir === 'down' && home && !browseOpen) {
+      const cur = focused();
+      if (cur && cur.classList.contains('tcard') && cur.closest('#tvShelf')) {
+        openBrowse();
+        return;
+      }
+    }
+    // 浏览层顶排（第一条可见排；类型过滤可能藏掉电影排）再按「上」→ 反向动画收层
+    if (dir === 'up' && home && browseOpen) {
+      const cur = focused();
+      const b = $('#tvBrowse', home);
+      const firstRow = b ? $all('.br-row', b).filter(isVis)[0] : null;
+      if (cur && firstRow && cur.closest('.br-row') === firstRow) {
+        closeBrowse();
+        return;
+      }
+    }
     const items = currentItems();
     if (!items.length) return;
     const cur = focused();
@@ -349,10 +575,12 @@
 
   // 返回键（原生 MainActivity.onBackPressed 调用）：逐层关闭，返回 true 表示已处理
   window.tvBack = function () {
+    if (fltPopOpen) { closeFltPop(); return true; }
     const player = $('#playerMask');
     if (isVis(player) && typeof closePlayer === 'function') { closePlayer(); return true; }
     const masks = $all('.modal-mask').filter(isVis);
     if (masks.length) { masks[masks.length - 1].classList.add('hidden'); return true; }
+    if (browseOpen) { closeBrowse(); return true; }
     return false;
   };
 

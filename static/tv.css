@@ -176,7 +176,7 @@ body.tv-mode #page-library { display: none; }
   letter-spacing: 1px;
 }
 .rail-row {
-  display: flex; gap: 10px; align-items: center;
+  display: flex; align-items: center;
   padding: 7px; border-radius: 12px; margin-bottom: 6px; cursor: pointer;
   border: 2px solid transparent;
 }
@@ -184,7 +184,7 @@ body.tv-mode #page-library { display: none; }
   width: 46px; height: 69px; object-fit: cover; border-radius: 8px; flex-shrink: 0;
   background: var(--card);
 }
-.rail-row .rr-info { min-width: 0; }
+.rail-row .rr-info { min-width: 0; margin-left: 13px; /* 封面与文字间留一个字符宽的空隙 */ }
 .rail-row .rr-title {
   font-size: 13px; line-height: 1.3; color: #fff;
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
@@ -196,9 +196,13 @@ body.tv-mode .rail-row.tv-focus {
 }
 
 /* ---------- 中部舞台 ---------- */
-#tvStage { flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 0 22px 0 12px; }
+#tvStage {
+  flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 0 22px 0 12px;
+  position: relative; /* #tvBrowse 绝对定位锚点 */
+}
 
-#tvTabs { display: flex; gap: 10px; margin: 2px 0 10px 4px; }
+#tvTabs { display: flex; gap: 10px; margin: 2px 0 10px 4px; position: relative; z-index: 2; }
+/* 过滤器胶囊：复用页签样式；.on 表示该过滤器已选非「全部」值 */
 .tv-tab {
   padding: 7px 20px; border-radius: 999px; font-size: 13px; cursor: pointer;
   background: rgba(255,255,255,.10); color: rgba(255,255,255,.78);
@@ -206,24 +210,63 @@ body.tv-mode .rail-row.tv-focus {
 }
 .tv-tab.on { background: rgba(255,255,255,.92); color: #111; font-weight: 600; }
 body.tv-mode .tv-tab.tv-focus { box-shadow: none; border-color: #fff; }
-
-/* Hero 卡：清晰封面大图 + 左下文字 */
-#tvHeroCard {
-  position: relative; flex: 1; min-height: 0; border-radius: 18px; overflow: hidden;
-  background: #0b0e13;
+/* 过滤胶囊的下拉指示：纯 CSS 三角（电视字体没有 ▾ 字形，用字符会变方框 x） */
+.tv-filter::after {
+  content: ''; display: inline-block; margin-left: 7px; vertical-align: 1px;
+  border-left: 5px solid transparent; border-right: 5px solid transparent;
+  border-top: 6px solid currentColor;
 }
+
+/* ---------- 过滤器选项浮层：胶囊正下方的纵向列表（方向键上下+确认+返回） ---------- */
+/* on=占位 in=终态，transition 双向生效（与浏览层同一套动画手法） */
+#tvFltPop {
+  position: absolute; z-index: 4; display: none;
+  min-width: 150px; max-width: 280px; max-height: 320px; overflow-y: auto;
+  background: rgba(16,20,26,.97); border-radius: 14px; padding: 6px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.7);
+  opacity: 0; transform: translateY(-8px);
+  transition: opacity .22s ease, transform .22s ease;
+}
+#tvFltPop.on { display: block; }
+#tvFltPop.in { opacity: 1; transform: none; }
+#tvFltPop::-webkit-scrollbar { width: 0; height: 0; display: none; }
+#tvFltPop .fp-opt {
+  padding: 9px 16px; border-radius: 9px; font-size: 13px; cursor: pointer;
+  color: rgba(255,255,255,.82); border: 2px solid transparent;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+}
+#tvFltPop .fp-opt.on { color: var(--accent2); font-weight: 600; }
+body.tv-mode #tvFltPop .fp-opt.tv-focus {
+  box-shadow: none; background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.85);
+}
+
+/* Hero 卡：清晰封面大图 + 左下文字。
+   卡片本体在文档流中位置尺寸不变；背景层（.hc-bg）向下延伸出卡片底边 50%
+   并渐隐，当作舞台背景——overflow:visible + 卡片自身 z-index 低于 tabs/shelf */
+#tvHeroCard {
+  position: relative; flex: 1; min-height: 0; border-radius: 18px; overflow: visible;
+  background: #0b0e13; z-index: 1;
+}
+/* 背景层：顶到卡片顶部，高度 150%（下半截延伸出卡片，靠 .hc-fade 渐隐收尾） */
+.hc-bg { position: absolute; top: 0; right: 0; left: 0; height: 150%; }
 .hc-bg .l {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+  /* 圆角只保留在卡片本体的顶边两角，延伸部分自然渐隐 */
+  border-radius: 18px 18px 0 0;
   background-size: cover; background-position: center 22%;
   opacity: 0; transition: opacity .6s ease;
 }
 .hc-bg .l.on { opacity: 1; }
 .hc-bg .hc-fade {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0;
+  border-radius: 18px 18px 0 0;
   background:
     linear-gradient(90deg, rgba(9,11,15,.92) 0%, rgba(9,11,15,.55) 42%, rgba(9,11,15,.04) 72%),
-    linear-gradient(rgba(9,11,15,0) 48%, rgba(9,11,15,.82) 96%);
+    /* 纵向：卡片底边（150% 盒的 2/3 处）已足够暗，延伸区继续压暗后最后 5% 淡出到透明 */
+    linear-gradient(rgba(9,11,15,0) 34%, rgba(9,11,15,.8) 64%, rgba(9,11,15,.97) 95%, rgba(9,11,15,0) 100%);
 }
+/* 浏览层打开：隐藏 Hero 文字与播放钮，背景大图保留并透出到浏览层 */
+#tvStage.browse-open .hc-body { display: none; }
 .hc-body { position: absolute; left: 26px; right: 42%; bottom: 20px; }
 .hc-badge { font-size: 12px; color: var(--accent2); letter-spacing: 1px; margin-bottom: 6px; }
 .hc-title {
@@ -243,11 +286,52 @@ body.tv-mode .tv-tab.tv-focus { box-shadow: none; border-color: #fff; }
 }
 body.tv-mode .hc-watch.tv-focus { box-shadow: 0 0 0 3px var(--accent2); background: #fff; }
 
-/* ---------- 底部海报行 ---------- */
+/* ---------- 底部海报行（最新录入 8 条） ---------- */
 #tvShelf {
-  display: flex; gap: 14px; padding: 12px 4px 20px;
+  display: flex; padding: 12px 4px 20px;
   overflow-x: auto; overflow-y: hidden; flex-shrink: 0;
+  position: relative; z-index: 2; /* 压在 Hero 延伸背景之上 */
 }
+/* 卡片间隔与浏览层一致（margin：Chrome 66 不支持 flex gap） */
+#tvShelf .tcard { margin-right: 14px; }
+
+/* ---------- 浏览层：两排全量分类（电影/剧集），浮在 Hero 区上层 ---------- */
+/* 极淡的纵向暗渐变：Hero 大图透出来当背景。TV WebView 视口只有 960x540
+   （dpr=2），底部海报行固定占 ~211px，Hero 区只剩 ~240px 放不下两排，
+   故浏览层从页签下方一直盖到舞台底（shelf 此时 visibility 隐藏保布局，
+   Hero 不平移不缩放）；z-index 高于 Hero 延伸背景 */
+#tvBrowse {
+  position: absolute; top: 44px; left: 12px; right: 22px; bottom: 8px;
+  z-index: 3; display: none; overflow: hidden;
+  padding: 6px 0 4px 16px; border-radius: 14px;
+  background: linear-gradient(rgba(6,8,12,.35), rgba(6,8,12,.82));
+  /* 滑动渐显进场/反向收层：on=占位，in=终态，transition 双向生效 */
+  opacity: 0; transform: translateY(36px);
+  transition: opacity .32s ease, transform .32s ease;
+}
+#tvBrowse.on { display: block; }
+#tvBrowse.in { opacity: 1; transform: none; }
+#tvStage.browse-open #tvShelf, #tvStage.browse-open .shelf-title { visibility: hidden; }
+/* 开屏底部「最近更新」列表标题（浏览层打开时随列表立刻隐去） */
+.shelf-title {
+  position: relative; z-index: 2;
+  font-size: 13px; color: rgba(255,255,255,.6); letter-spacing: 1px;
+  margin: 0 0 0 6px;
+}
+#tvBrowse .br-title {
+  font-size: 13px; color: rgba(255,255,255,.75); letter-spacing: 1px;
+  margin: 2px 0 4px 2px;
+}
+#tvBrowse .br-row + .br-row { margin-top: 6px; }
+#tvBrowse .br-strip {
+  display: flex; overflow-x: auto; overflow-y: hidden;
+  /* 上下留白要容下焦点卡 scale(1.06) 的外扩 + 2px 白框，否则顶边被 overflow 裁掉 */
+  padding: 10px 4px 12px;
+}
+#tvBrowse .br-strip::-webkit-scrollbar { width: 0; height: 0; display: none; }
+/* 卡片复用 .tcard，尺寸略大于底部行；间距用 margin 不用 flex gap（Chrome 66） */
+#tvBrowse .tcard { width: 110px; margin-right: 14px; }
+#tvBrowse .tcard .tp-wrap { height: 160px; }
 /* TV 上不显示滚动条（占位又难看），滚动由遥控器驱动 */
 #tvShelf::-webkit-scrollbar, #tvRail::-webkit-scrollbar { width: 0; height: 0; display: none; }
 .tcard { width: 106px; flex-shrink: 0; cursor: pointer; transition: transform .18s ease; }

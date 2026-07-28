@@ -218,6 +218,7 @@ def _entry_of_movie(row: dict) -> dict:
         "backdrop": row.get("backdrop"),
         "genres": row["genres"] or "", "overview": row["overview"] or "",
         "tmdb_id": row["tmdb_id"], "size": row["size"], "has_sub": row["has_sub"],
+        "added": row["created_at"] or 0,
     }
 
 
@@ -295,6 +296,8 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
     for show in shows.values():
         group_rows = show.pop("_rows")
         folder = show.pop("_folder")
+        # 录入时间 = 组内最新一集的 created_at（新下的集让整部剧顶上「最新」）
+        show["added"] = max((x["created_at"] or 0) for x in group_rows)
         with_tmdb = [x for x in group_rows if x["tmdb_id"]]
         best = None
         if with_tmdb:
@@ -500,15 +503,21 @@ async def media_playlink(media_id: int):
 # 服务端统一存一份，web/TV 各自再留本地副本做离线兜底，取两者较大值续播
 
 @app.get("/api/progress")
-async def get_progress():
-    """全量观看进度：{ "<media_id>": <秒>, ... }（数据量小，一次全取）。"""
-    rows = db.q("SELECT media_id, pos_sec FROM watch_progress")
+async def get_progress(full: int = 0):
+    """全量观看进度：{ "<media_id>": <秒>, ... }（数据量小，一次全取）。
+    ?full=1 带最后观看时间：{ "<id>": {"pos": <秒>, "ts": <epoch秒>} }（TV 最新列表用）。"""
+    rows = db.q("SELECT media_id, pos_sec, updated_at FROM watch_progress")
+    if full:
+        return {str(r["media_id"]): {"pos": r["pos_sec"], "ts": r["updated_at"]}
+                for r in rows}
     return {str(r["media_id"]): r["pos_sec"] for r in rows}
 
 
 @app.post("/api/progress/{media_id}")
 async def set_progress(media_id: int, request: Request):
-    """更新单条进度；pos<=0 或缺省 = 播完/从头开始，删除该条。"""
+    """更新单条进度；pos<=0 或缺省 = 播完/从头开始。
+    播完也保留 pos=0 记录：updated_at 即最后观看时间（TV 最新列表据此过滤），
+    老客户端读到 0 与读不到等价（都要求 >30 秒才提示续播）。"""
     try:
         body = await request.json()
     except Exception:
@@ -517,12 +526,11 @@ async def set_progress(media_id: int, request: Request):
         pos = float(body.get("pos") or 0)
     except (TypeError, ValueError):
         pos = 0.0
-    if pos <= 0:
-        db.exe("DELETE FROM watch_progress WHERE media_id=?", (media_id,))
-    else:
-        db.exe("INSERT INTO watch_progress(media_id,pos_sec,updated_at) VALUES(?,?,?) "
-               "ON CONFLICT(media_id) DO UPDATE SET pos_sec=excluded.pos_sec,"
-               "updated_at=excluded.updated_at", (media_id, pos, db.now()))
+    if pos < 0:
+        pos = 0.0
+    db.exe("INSERT INTO watch_progress(media_id,pos_sec,updated_at) VALUES(?,?,?) "
+           "ON CONFLICT(media_id) DO UPDATE SET pos_sec=excluded.pos_sec,"
+           "updated_at=excluded.updated_at", (media_id, pos, db.now()))
     return {"ok": True}
 
 
