@@ -149,8 +149,13 @@ body.tv-mode #page-library { display: none; }
 .continue-play {
   position: absolute; right: 12px; top: 12px;
   width: 35px; height: 35px; display: flex; align-items: center;
-  justify-content: center; padding-left: 2px; border-radius: 50%;
-  color: #111; background: rgba(255,255,255,.9); font-size: 13px;
+  justify-content: center; border-radius: 50%;
+  color: #111; background: rgba(255,255,255,.9);
+}
+.continue-play::before {
+  content: ""; display: block; width: 0; height: 0; margin-left: 3px;
+  border-top: 6px solid transparent; border-bottom: 6px solid transparent;
+  border-left: 10px solid #111;
 }
 .continue-progress {
   position: absolute; left: 12px; right: 12px; bottom: 9px;
@@ -201,27 +206,43 @@ body.tv-mode .modal {
   border: 1px solid rgba(255,255,255,.08); border-radius: 22px;
   background: #11141a; box-shadow: 0 30px 90px rgba(0,0,0,.82);
 }
+body.tv-mode #detailModal {
+  width: 60vw; max-width: 60vw; max-height: 88vh;
+  position: relative; box-sizing: border-box;
+  overflow-x: hidden; overflow-y: auto;
+}
 body.tv-mode .modal .mhead {
   position: absolute; z-index: 5; top: 12px; right: 14px; padding: 0;
 }
 body.tv-mode .modal .mhead h3 { display: none; }
 body.tv-mode .modal .mclose {
+  position: relative;
   width: 40px; height: 40px; border: 0; border-radius: 50%;
-  background: rgba(0,0,0,.6); color: #fff;
+  background: rgba(0,0,0,.6); color: transparent; font-size: 0;
 }
-body.tv-mode .detail-hero { height: 320px; border-radius: 0; }
+body.tv-mode .modal .mclose::before,
+body.tv-mode .modal .mclose::after {
+  content: ""; position: absolute; left: 12px; top: 19px;
+  width: 16px; height: 2px; border-radius: 2px; background: #fff;
+}
+body.tv-mode .modal .mclose::before { transform: rotate(45deg); }
+body.tv-mode .modal .mclose::after { transform: rotate(-45deg); }
+body.tv-mode .detail-hero { height: 190px; border-radius: 0; }
 body.tv-mode .detail-hero img { opacity: .85; }
 body.tv-mode .detail-hero .fade {
   background: linear-gradient(rgba(17,20,26,0) 30%, #11141a 96%);
 }
-body.tv-mode .detail-flex { margin-top: -92px; padding: 0 30px 24px; }
+body.tv-mode .detail-flex { margin-top: -62px; padding: 0 22px 14px; gap: 14px; }
 body.tv-mode .detail-flex .dposter {
-  width: 150px; border: 0; border-radius: 14px;
+  width: 100px; border: 0; border-radius: 12px;
   box-shadow: 0 16px 38px rgba(0,0,0,.62);
 }
-body.tv-mode .detail-meta h2 { font-size: 30px; }
+body.tv-mode .detail-meta h2 { font-size: 24px; }
 body.tv-mode .detail-meta .tags { color: rgba(255,255,255,.55); }
-body.tv-mode .detail-meta .overview { color: rgba(255,255,255,.72); line-height: 1.65; }
+body.tv-mode .detail-meta .overview {
+  color: rgba(255,255,255,.72); line-height: 1.55;
+  max-height: 4.65em; overflow: hidden;
+}
 body.tv-mode .detail-actions .btn,
 body.tv-mode .ep-row .btn {
   border-radius: 12px; border: 2px solid transparent;
@@ -232,8 +253,26 @@ body.tv-mode .ep-row .btn.primary { background: #fff; color: #111; }
 body.tv-mode .btn.tv-focus {
   border-color: #8ec9ff; background: #fff; color: #111;
 }
-body.tv-mode .ep-list { padding: 0 28px 22px; }
-body.tv-mode .ep-row { border-radius: 11px; border-top: 0; }
+body.tv-mode .ep-list {
+  display: grid; grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 10px; margin-top: 8px; padding: 0 20px 20px;
+}
+body.tv-mode .ep-row { display: contents; }
+body.tv-mode .ep-row > span,
+body.tv-mode .ep-row button[data-subs] { display: none; }
+body.tv-mode .ep-row .btn[data-play] {
+  display: flex; align-items: center; justify-content: center;
+  width: auto; min-width: 0; height: 38px; padding: 0;
+  border: 0; border-radius: 9px;
+  background: rgba(205,210,218,.28); color: rgba(255,255,255,.78);
+  font-size: 15px; font-weight: 650; line-height: 1;
+}
+body.tv-mode .ep-row .btn[data-play] .tri { display: none; }
+body.tv-mode .ep-row .btn[data-play] .ep-tile-label { display: block; }
+body.tv-mode .ep-row .btn[data-play].tv-focus {
+  border: 0; background: rgba(244,246,248,.94); color: #17191d;
+  box-shadow: 0 0 0 2px #f2a23b;
+}
 body.tv-mode .player-bar .btn { border-radius: 10px; }
 body.tv-mode .ver-tag { color: rgba(255,255,255,.22); }
 

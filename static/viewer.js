@@ -114,7 +114,11 @@ async function openDetail(key) {
         <span class="dot ${ep.has_sub ? 'g' : (ep.sub_status === 'failed' ? 'r' : 'y')}"
               title="${ep.has_sub ? '有字幕' : (ep.sub_status === 'failed' ? '字幕未找到' : '无字幕')}"></span>
         <span class="fsize">${fmtSize(ep.size)}</span>
-        <button class="btn small primary" data-play="${ep.id}"><i class="tri"></i></button>
+        <button class="btn small primary" data-play="${ep.id}"
+                data-episode="${String(ep.episode || '?').padStart(2, '0')}"
+                aria-label="播放第${String(ep.episode || '?').padStart(2, '0')}集">
+          <span class="ep-tile-label">${String(ep.episode || '?').padStart(2, '0')}</span><i class="tri"></i>
+        </button>
         ${state.adminAuthed ? `<button class="btn small" data-subs="${ep.id}">字幕</button>` : ''}
       </div>`).join('') + `</div>`;
   }

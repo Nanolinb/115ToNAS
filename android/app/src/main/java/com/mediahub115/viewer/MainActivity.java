@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
     private static final String PREFS = "mediahub";
     private static final String KEY_SERVER = "server";
     private static final String KEY_DEVICE_ID = "device_id";
-    private static final String DEFAULT_SERVER = "http://192.168.1.107:8115";
+    private static final String DEFAULT_SERVER = BuildConfig.DEFAULT_SERVER;
 
     private WebView web;
     private SharedPreferences sp;

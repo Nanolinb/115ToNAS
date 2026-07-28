@@ -121,10 +121,10 @@
       '      <button class="hc-detail">更多信息</button></div>' +
       '    </div>' +
       '  </div>' +
+      '  <div class="tv-row-head"><h2>全部影片与剧集</h2><span class="tv-count"></span></div>' +
+      '  <div id="tvShelf"></div>' +
       '  <div class="tv-row-head"><h2 id="continueTitle">继续观看</h2></div>' +
       '  <div id="tvContinue"></div>' +
-      '  <div class="tv-row-head"><h2>媒体库</h2><span class="tv-count"></span></div>' +
-      '  <div id="tvShelf"></div>' +
       '</section>';
     const page = $('#page-library');
     page.parentNode.insertBefore(home, page);
@@ -214,7 +214,7 @@
           + '" data-mid="' + r.id + '" data-resume="' + (r.pos > 0 ? '1' : '') + '">' +
           '<div class="continue-art"><img src="'
           + (pic ? '/api/poster/' + encodeURIComponent(pic) : '/api/poster/_none') + '">' +
-          '<span class="continue-play">▶</span>' +
+          '<span class="continue-play" aria-hidden="true"></span>' +
           (pct ? '<span class="continue-progress"><i style="width:' + pct + '%"></i></span>' : '') +
           '</div><div class="continue-copy"><strong>' + esc(e.name_cn || e.title)
           + '</strong><span>' + esc(r.pos > 0 ? sub + ' · 看到 ' + fmtPos(r.pos) : sub)
@@ -323,6 +323,18 @@
     step();
   }
 
+  function scrollPageTo(el) {
+    if (!home || !home.contains(el)) return;
+    const r = el.getBoundingClientRect();
+    const topLimit = 18;
+    const bottomLimit = window.innerHeight - 34;
+    if (r.top < topLimit) {
+      home.scrollTop += r.top - topLimit;
+    } else if (r.bottom > bottomLimit) {
+      home.scrollTop += r.bottom - bottomLimit;
+    }
+  }
+
   function setFocus(el) {
     $all('.tv-focus').forEach((x) => x.classList.remove('tv-focus'));
     if (!el) return;
@@ -332,6 +344,9 @@
     } else {
       try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { el.scrollIntoView(false); }
     }
+    // 横向卡片仍需要带动最外层纵向容器；旧实现遗漏了这一步，
+    // 导致焦点进入屏外行但画面停在原处。
+    scrollPageTo(el);
     // 聚焦海报/续看行 → Hero 与氛围背景联动
     const key = el.dataset ? el.dataset.key : null;
     if (key && (el.classList.contains('tcard') || el.classList.contains('continue-card'))) {
@@ -417,7 +432,7 @@
       const cur = focused();
       if (items.length && (!cur || items.indexOf(cur) < 0)) {
         const preferred = home && !isVis($('#detailMask'))
-          ? ($('.continue-card', home) || $('.hc-watch', home))
+          ? ($('.tcard', home) || $('.continue-card', home) || $('.hc-watch', home))
           : items.filter((el) => el.classList.contains('primary'))[0];
         setFocus(preferred || items[0]);
       }

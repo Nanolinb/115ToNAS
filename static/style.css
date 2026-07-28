@@ -144,6 +144,7 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 }
 .ep-row .ep-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c4ccd8; }
 .ep-row .ep-label { color: var(--accent2); font-weight: 600; white-space: nowrap; }
+.ep-tile-label { display: none; }
 .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 .dot.g { background: var(--green); } .dot.r { background: var(--red); } .dot.y { background: var(--accent); }
 
