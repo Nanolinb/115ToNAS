@@ -140,10 +140,10 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 /* 剧集列表与弹窗边界保持固定距离 */
 .ep-list { margin-top: 18px; padding-bottom: 8px; }
 /* 观影端集数数字方框 */
-.ep-pills { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; padding-bottom: 8px; }
+.ep-pills { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 18px; padding-bottom: 8px; }
 .ep-pill {
-  min-width: 46px; height: 36px; padding: 0 12px; border: none; border-radius: 10px;
-  background: rgba(255,255,255,.12); color: #c9cfd8; font-size: 14px; font-weight: 600;
+  min-width: 32px; height: 25px; padding: 0 8px; border: none; border-radius: 5px;
+  background: rgba(255,255,255,.12); color: #c9cfd8; font-size: 13px; font-weight: 600;
   font-variant-numeric: tabular-nums; cursor: pointer;
 }
 .ep-pill:hover { background: rgba(255,255,255,.22); color: #fff; }
