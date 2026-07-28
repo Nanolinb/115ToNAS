@@ -928,7 +928,7 @@ async def subtitle_track(media_id: int, idx: int, offset: float = 0):
         if not p.exists():
             raise HTTPException(404, "字幕文件不存在")
     offset = min(max(0.0, offset or 0.0), 24 * 3600)
-    text = p.read_text(encoding="utf-8", errors="ignore")
+    text = subtitles.read_sub_text(p)
     if p.suffix.lower() == ".srt":
         vtt = "WEBVTT\n\n" + re.sub(r"(\d{2}:\d{2}:\d{2}),(\d{3})",
                                     r"\1.\2", text)

@@ -23,12 +23,18 @@ LANG_ORDER = {"zh": 0, "zh-en": 1, "cht": 2, "en": 3}
 
 
 def _detect_lang(infix: str) -> str:
-    """从字幕文件名中缀识别语言（如 .zh / .en / .cht / .zh-en / .chs / .双语）。"""
-    n = infix.lower()
+    """从字幕文件名中缀识别语言（如 .zh / .en / .cht / .zh-en / .chs / .双语）。
+    先剥发布标签且只认结尾后缀：发行名里的音轨标记（ITA.ENG 等）不再误判为字幕语言。"""
+    n = _TAG_RE.sub(" ", infix.lower()).strip()
+    n = re.sub(r"[ .\[\]_-]+$", "", n)
     for key, pats in (("zh-en", (".zh-en", ".zh_en", ".chs-eng", ".zho-eng", ".双语", ".简英")),
                       ("cht", (".cht", ".tc", ".zht", ".繁")),
                       ("zh", (".zh", ".chs", ".sc", ".zhs", ".cn", ".简")),
                       ("en", (".en", ".eng", ".英"))):
+        if any(n.endswith(p) for p in pats):
+            return key
+    # 中文标记允许出现在任意位置（如「.简.修复版」），英文必须结尾
+    for key, pats in (("zh-en", (".双语", ".简英")), ("cht", (".繁",)), ("zh", (".简",))):
         if any(p in n for p in pats):
             return key
     return "zh"
@@ -46,6 +52,53 @@ def _ep_key(stem: str) -> str | None:
     if m.group(1) is not None:
         return f"s{int(m.group(1)):02d}e{int(m.group(2)):03d}"
     return f"e{int(m.group(3) or m.group(4)):03d}"
+
+
+_SEASON_RE = re.compile(r"[Ss](\d{1,2})(?![ ._-]*[Ee]\d)")
+
+
+def _season_key(stem: str) -> int | None:
+    """季号：S02E01 或裸 S02 / Season.2 都能取到。"""
+    m = re.search(r"[Ss](\d{1,2})[ ._-]*[Ee]\d", stem) or _SEASON_RE.search(stem)
+    if not m:
+        m = re.search(r"[Ss]eason[ ._-]?(\d{1,2})", stem, re.I)
+    return int(m.group(1)) if m else None
+
+
+def relevance(video_stem: str, desc: str) -> int:
+    """字幕候选与视频文件名的相关度打分（-1 = 硬冲突，淘汰）。
+
+    剧集视频：候选集数不一致 → -1；集数精确匹配 +100；只有季号且同季 +30；
+    无任何集数/季号信息不给加成（由调用方用阈值挡掉动漫同名单集等错配）。
+    电影视频：候选带集数标记 → -1（电影不该挂剧集字幕）；
+    其余按去标签后的词元重合数计分。"""
+    vek, dek = _ep_key(video_stem), _ep_key(desc)
+    if vek or dek:
+        if not (vek and dek) or vek != dek:
+            if dek and vek:  # 两边都有集数但不一致
+                return -1
+            if dek and not vek:  # 电影挂剧集字幕
+                return -1
+            # 视频有集数、候选没有：看季号
+            vs, ds = _season_key(video_stem), _season_key(desc)
+            if ds is not None:
+                if vs is not None and ds != vs:
+                    return -1
+                bonus = 30  # 季包候选
+            else:
+                bonus = 0
+        else:
+            bonus = 100  # 集数精确匹配
+    else:
+        bonus = 0
+    vt = set(_TOKEN_RE.findall(_TAG_RE.sub(" ", video_stem).lower()))
+    dt = set(_TOKEN_RE.findall(_TAG_RE.sub(" ", desc).lower()))
+    return bonus + len(vt & dt)
+
+
+def min_relevance(video_stem: str) -> int:
+    """候选入选门槛：剧集必须有集/季对应关系，电影至少沾一个词元。"""
+    return 30 if _ep_key(video_stem) else 1
 
 
 def _norm(stem: str) -> str:
@@ -110,8 +163,10 @@ def _langflags(s: dict) -> dict:
     return (s.get("lang") or {}).get("langlist") or {}
 
 
-def _pick_for(subs: list, target: str) -> dict | None:
-    """按目标语言挑选候选：zh=纯简中，en=纯英文，zh-en=双语合并。"""
+def _rank_for(subs: list, target: str, video_stem: str = "") -> list:
+    """按目标语言筛候选并依相关度排序（高→低）：zh=纯简中，en=纯英文，zh-en=双语合并。
+    候选须过文件名相关度门槛（防「搜 One Piece 挂到动漫版」）。
+    返回列表供调用方逐个尝试——第一条是 7z/失效链接时能落到下一条。"""
     def ok(s):
         L = _langflags(s)
         chs = bool(L.get("langchs"))
@@ -125,11 +180,19 @@ def _pick_for(subs: list, target: str) -> dict | None:
         if target == "zh-en":
             return dou or (chs and eng)
         return False
-    cands = [s for s in subs if s.get("id") and ok(s)]
+
+    def score(s):
+        desc = f"{s.get('native_name') or ''} {s.get('videoname') or ''}"
+        return relevance(video_stem, desc)
+
+    floor = min_relevance(video_stem)
+    cands = [s for s in subs if s.get("id") and ok(s) and score(s) >= floor]
     if not cands and target == "zh":
-        # 宽松回退：任何含简中的（含双语条目的简中部分）
-        cands = [s for s in subs if s.get("id") and _langflags(s).get("langchs")]
-    return cands[0] if cands else None
+        # 宽松回退：任何含简中的（含双语条目的简中部分），同样要过相关度门槛
+        cands = [s for s in subs if s.get("id") and _langflags(s).get("langchs")
+                 and score(s) >= floor]
+    cands.sort(key=score, reverse=True)
+    return cands
 
 
 async def search_and_download(video_path: Path, title: str, year: int | None) -> list:
@@ -157,31 +220,27 @@ async def _assrt_download(video_path: Path, title: str, year: int | None) -> lis
             if not subs:
                 print(f"[subtitles] assrt 无匹配结果: {title} {year or ''}")
                 return []
+            stem = video_path.stem
+            used_ids = set()
             for target, suffix in TRACK_TARGETS:
-                chosen = _pick_for(subs, target)
-                if not chosen:
-                    continue
-                track = await _download_one(client, token, chosen,
-                                            video_path, suffix, target)
-                if track:
-                    saved.append(track)
+                # 按相关度逐个尝试：7z 拒收/链接失效时下一位候选补上
+                for chosen in _rank_for(subs, target, stem):
+                    # 同一条目不重复下载（zh 宽松回退与 zh-en 可能选中同一条双语，
+                    # 否则同一文件会以两个语言后缀各存一份）
+                    if chosen["id"] in used_ids:
+                        continue
+                    used_ids.add(chosen["id"])
+                    track = await _download_one(client, token, chosen,
+                                                video_path, suffix, target)
+                    if track:
+                        saved.append(track)
+                        break
     except Exception as e:
         print(f"[subtitles] 搜刮失败 {title}: {type(e).__name__} {e}")
     return saved
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
-
-
-def _relevance(video_stem: str, desc: str) -> int:
-    """subhd 候选与视频文件名的相关度：剧集集数不一致返回 -1（淘汰），
-    否则按去标签后的词元重合数计分（越大越可能是同一版本）。"""
-    vek, dek = _ep_key(video_stem), _ep_key(desc)
-    if vek and dek and vek != dek:
-        return -1
-    vt = set(_TOKEN_RE.findall(_TAG_RE.sub(" ", video_stem).lower()))
-    dt = set(_TOKEN_RE.findall(_TAG_RE.sub(" ", desc).lower()))
-    return len(vt & dt)
 
 
 async def _subhd_download(video_path: Path, title: str, year: int | None,
@@ -199,18 +258,19 @@ async def _subhd_download(video_path: Path, title: str, year: int | None,
                 print(f"[subtitles] subhd 无匹配结果: {title} {year or ''}")
                 return []
             vstem = video_path.stem
-            scored = [it for it in items if _relevance(vstem, it["desc"]) >= 0]
-            scored.sort(key=lambda it: _relevance(vstem, it["desc"]), reverse=True)
+            floor = min_relevance(vstem)
+            scored = [it for it in items if relevance(vstem, it["desc"]) >= floor]
+            scored.sort(key=lambda it: relevance(vstem, it["desc"]), reverse=True)
             for target, suffix in targets:
-                cand = next((it for it in scored if it["lang"] == target), None)
-                if not cand:
-                    continue
-                raw = await subhd.download_sub(cli, cand["sid"])
-                if not raw:
-                    continue
-                track = _save_raw(video_path, raw, suffix, target)
-                if track:
-                    saved.append(track)
+                # 按相关度逐个尝试：7z 拒收/下载失败时下一位候选补上
+                for cand in [it for it in scored if it["lang"] == target]:
+                    raw = await subhd.download_sub(cli, cand["sid"])
+                    if not raw:
+                        continue
+                    track = _save_raw(video_path, raw, suffix, target)
+                    if track:
+                        saved.append(track)
+                        break
     except Exception as e:
         print(f"[subtitles] subhd 搜刮失败 {title}: {type(e).__name__} {e}")
     return saved
@@ -230,9 +290,20 @@ async def _search_candidates(client: httpx.AsyncClient, token: str,
     return subs
 
 
+def _pick_ep_name(names: list, video_stem: str) -> str:
+    """字幕包/多文件条目中挑与视频集数对应的那个文件；无集数信息取第一个。"""
+    vek = _ep_key(video_stem)
+    if vek:
+        for n in names:
+            if _ep_key(Path(n).stem) == vek:
+                return n
+    return names[0]
+
+
 def _save_raw(video_path: Path, raw: bytes, suffix: str, lang: str) -> dict | None:
     """把字幕内容存到视频旁（<视频主干><语言后缀>.<扩展名>）。
-    支持 zip 包（取第一条字幕，srt/vtt 优先）与 srt/ass/vtt 格式识别。"""
+    zip 包按集数挑文件；7z/rar/gzip 无法解就拒收（防二进制垃圾存成 .srt）；
+    格式识别在转码后进行（UTF-16 的 ASS 也能认出来）。"""
     if raw[:4] == b"PK\x03\x04":  # zip 字幕包
         import io
         import zipfile
@@ -244,20 +315,28 @@ def _save_raw(video_path: Path, raw: bytes, suffix: str, lang: str) -> dict | No
                 if not names:
                     return None
                 names.sort(key=lambda n: Path(n).suffix.lower() not in (".vtt", ".srt"))
-                raw = z.read(names[0])
+                raw = z.read(_pick_ep_name(names, video_path.stem))
         except zipfile.BadZipFile:
             return None
+    elif raw[:6] in (b"7z\xbc\xaf\x27\x1c", b"Rar!\x1a\x07\x00", b"Rar!\x1a\x07\x01") \
+            or raw[:2] == b"\x1f\x8b":
+        print(f"[subtitles] 无法解压的字幕包格式，已拒收: {video_path.name}")
+        return None
+    raw = _to_utf8(raw)
     head = raw[:200].decode("utf-8", errors="ignore")
     if "[Script Info]" in head:
         ext = ".ass"
     elif head.startswith("WEBVTT"):
         ext = ".vtt"
-    else:
+    elif "-->" in raw[:4000].decode("utf-8", errors="ignore"):
         ext = ".srt"
+    else:
+        print(f"[subtitles] 下载内容不是字幕（HTML/二进制？），已拒收: {video_path.name}")
+        return None
     dest = video_path.with_suffix("").with_name(video_path.stem + suffix + ext)
     if dest.exists():
         return {"lang": lang, "label": LANG_META[lang], "path": str(dest)}
-    dest.write_bytes(_to_utf8(raw))
+    dest.write_bytes(raw)
     print(f"[subtitles] 字幕已保存: {dest.name}")
     return {"lang": lang, "label": LANG_META[lang], "path": str(dest)}
 
@@ -267,8 +346,15 @@ async def _download_one(client: httpx.AsyncClient, token: str, chosen: dict,
     detail_subs = await _detail(client, token, chosen["id"])
     s0 = detail_subs[0] if detail_subs else chosen
     files = s0.get("filelist") or []
-    # 多文件字幕包走 filelist，单文件字幕直接在条目上带 url
-    url = (files[0].get("url") if files else None) or s0.get("url")
+    # 多文件字幕包（常见于整季打包）：挑与视频集数对应的文件，单文件直接取 url
+    if files:
+        pick = _pick_ep_name([f.get("filename") or f.get("f") or "" for f in files],
+                             video_path.stem)
+        f0 = next((f for f in files
+                   if (f.get("filename") or f.get("f")) == pick), files[0])
+        url = f0.get("url")
+    else:
+        url = s0.get("url")
     if not url:
         print(f"[subtitles] assrt detail 无下载地址: id={chosen['id']}")
         return None
@@ -320,8 +406,22 @@ async def _fetch(client: httpx.AsyncClient, url: str, retries: int = 3) -> bytes
     return None
 
 
+def read_sub_text(p: Path) -> str:
+    """读字幕文件为 UTF-8 文本：按 BOM/编码探测转换（UTF-16/GBK/Big5 都兼容）。
+    服务端给播放器/浏览器喂字幕统一走这里，杜绝 UTF-16 原样输出成乱码。"""
+    return _to_utf8(p.read_bytes()).decode("utf-8", errors="ignore")
+
+
 def _to_utf8(raw: bytes) -> bytes:
-    for enc in ("utf-8-sig", "utf-8", "gb18030", "big5"):
+    # 带 BOM 的先按 BOM 走（UTF-16 的字节流可能被 gb18030「成功」误解成乱码）
+    if raw[:3] == b"\xef\xbb\xbf":
+        return raw.decode("utf-8-sig").encode("utf-8")
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        try:
+            return raw.decode("utf-16").encode("utf-8")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            pass
+    for enc in ("utf-8", "gb18030", "big5"):
         try:
             return raw.decode(enc).encode("utf-8")
         except (UnicodeDecodeError, UnicodeEncodeError):

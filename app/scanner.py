@@ -149,26 +149,25 @@ async def scan_file(path: Path, lib_type: str, force: bool = False):
         except OSError:
             pass
 
-    # 缺字幕语言（简中/英文/双语）且配置了 token → 在线补刮
-    if db.get_secret("assrt_token", "").strip():
-        have = {t["lang"] for t in tracks}
-        if not {"zh", "en", "zh-en"} <= have:
-            db.exe("UPDATE media SET sub_status='searching' WHERE id=?", (media_id,))
-            title_q = (meta or {}).get("original_title") or info["title"]
+    # 缺字幕语言（简中/英文/双语）→ 在线补刮（assrt 需 token，subhd 免 token 兜底）
+    have = {t["lang"] for t in tracks}
+    if not {"zh", "en", "zh-en"} <= have:
+        db.exe("UPDATE media SET sub_status='searching' WHERE id=?", (media_id,))
+        title_q = (meta or {}).get("original_title") or info["title"]
+        new_tracks = await subtitles.search_and_download(
+            path, title_q, values["year"])
+        if not new_tracks and title_q != info["title"]:
             new_tracks = await subtitles.search_and_download(
-                path, title_q, values["year"])
-            if not new_tracks and title_q != info["title"]:
-                new_tracks = await subtitles.search_and_download(
-                    path, info["title"], values["year"])
-            for t in new_tracks:
-                if t["lang"] not in have:
-                    tracks.append(t)
-                    have.add(t["lang"])
-            db.exe("""UPDATE media SET sub_status=?, has_sub=?, sub_path=?, subs=?
-                      WHERE id=?""",
-                   ("ok" if tracks else "failed", 1 if tracks else 0,
-                    tracks[0]["path"] if tracks else None,
-                    json.dumps(tracks, ensure_ascii=False), media_id))
+                path, info["title"], values["year"])
+        for t in new_tracks:
+            if t["lang"] not in have:
+                tracks.append(t)
+                have.add(t["lang"])
+        db.exe("""UPDATE media SET sub_status=?, has_sub=?, sub_path=?, subs=?
+                  WHERE id=?""",
+               ("ok" if tracks else "failed", 1 if tracks else 0,
+                tracks[0]["path"] if tracks else None,
+                json.dumps(tracks, ensure_ascii=False), media_id))
 
 
 async def rematch(media_id: int, tmdb_id: int | None = None,
