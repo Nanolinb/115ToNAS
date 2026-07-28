@@ -241,32 +241,80 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
         gone = set(stale)
         rows = [r for r in rows if r["id"] not in gone]
     movies, shows = [], {}
+    tv_root = _sc.tv_dir().resolve()
     for r in rows:
         if r["type"] == "movie":
             movies.append(_entry_of_movie(r))
+            continue
+        # 分组基准优先用库内顶层文件夹：同一文件夹 = 同一部剧（用户下载习惯）。
+        # TMDB 误匹配（部分集匹配上、部分没有）或标题解析偏差（"1923" 被当成
+        # 年份、剧名错取成单集名）都会把同季的集拆成多张卡，文件夹分组不受这些影响
+        folder = None
+        try:
+            rel = Path(r["path"]).resolve().relative_to(tv_root)
+            if len(rel.parts) > 1:
+                folder = rel.parts[0]
+        except ValueError:
+            pass
+        if folder:
+            base = f"d:{folder.lower()}"
+        elif r["tmdb_id"]:
+            base = f"t{r['tmdb_id']}"
         else:
-            # 按 剧+季 分组（季号来自文件名解析），同剧不同季各自成卡
-            season = r["season"] or 1
-            base = f"t{r['tmdb_id']}" if r["tmdb_id"] else f"n:{r['title']}"
-            show = shows.setdefault(f"{base}:s{season}", {
-                "key": f"{base}:s{season}", "kind": "show", "base": base,
-                "season": season, "title": r["title"],
-                "name_cn": r["name_cn"], "year": r["year"], "poster": r["poster"],
-                "backdrop": r.get("backdrop"),
-                "rating": r["rating"], "genres": r["genres"] or "",
-                "overview": r["overview"] or "", "tmdb_id": r["tmdb_id"],
-                "episodes": [],
+            base = f"n:{r['title']}"
+        # 按 组+季 分组（季号来自文件名解析），同剧不同季各自成卡
+        season = r["season"] or 1
+        show = shows.setdefault(f"{base}:s{season}", {
+            "key": f"{base}:s{season}", "kind": "show", "base": base,
+            "season": season, "title": r["title"],
+            "name_cn": r["name_cn"], "year": r["year"], "poster": None,
+            "backdrop": None,
+            "rating": r["rating"], "genres": r["genres"] or "",
+            "overview": r["overview"] or "", "tmdb_id": r["tmdb_id"],
+            "episodes": [], "_folder": folder, "_rows": [],
+        })
+        show["_rows"].append(r)
+        show["episodes"].append({
+            "id": r["id"], "season": r["season"] or 1,
+            "episode": r["episode"], "path": r["path"],
+            "name": Path(r["path"]).name, "size": r["size"],
+            "has_sub": r["has_sub"], "sub_status": r["sub_status"],
+        })
+        if not show["poster"] and r["poster"]:
+            show["poster"] = r["poster"]
+        if not show["backdrop"] and r.get("backdrop"):
+            show["backdrop"] = r["backdrop"]
+
+    # 卡片元数据：取「集数最多的那个 TMDB 匹配」的整条记录（部分集误匹配时
+    # 少数服从多数）；整组都没匹配上，用文件夹名解析剧名兜底
+    from . import parser as _parser
+    for show in shows.values():
+        group_rows = show.pop("_rows")
+        folder = show.pop("_folder")
+        with_tmdb = [x for x in group_rows if x["tmdb_id"]]
+        best = None
+        if with_tmdb:
+            counts = {}
+            for x in with_tmdb:
+                counts[x["tmdb_id"]] = counts.get(x["tmdb_id"], 0) + 1
+            mode_id = max(counts, key=counts.get)
+            cand = [x for x in with_tmdb if x["tmdb_id"] == mode_id]
+            best = next((x for x in cand if x["poster"]), cand[0])
+        if best:
+            show.update({
+                "title": best["title"], "name_cn": best["name_cn"],
+                "year": best["year"] or show["year"],
+                "rating": best["rating"], "genres": best["genres"] or "",
+                "overview": best["overview"] or "", "tmdb_id": best["tmdb_id"],
             })
-            show["episodes"].append({
-                "id": r["id"], "season": r["season"] or 1,
-                "episode": r["episode"], "path": r["path"],
-                "name": Path(r["path"]).name, "size": r["size"],
-                "has_sub": r["has_sub"], "sub_status": r["sub_status"],
-            })
-            if not show["poster"] and r["poster"]:
-                show["poster"] = r["poster"]
-            if not show["backdrop"] and r.get("backdrop"):
-                show["backdrop"] = r["backdrop"]
+            if best["poster"]:
+                show["poster"] = best["poster"]
+            if best.get("backdrop"):
+                show["backdrop"] = best["backdrop"]
+        elif folder:
+            info = _parser.parse(folder)
+            if info.get("title"):
+                show["title"] = info["title"]
 
     entries = movies + list(shows.values())
 
