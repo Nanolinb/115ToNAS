@@ -68,32 +68,28 @@ def _season_key(stem: str) -> int | None:
 def relevance(video_stem: str, desc: str) -> int:
     """字幕候选与视频文件名的相关度打分（-1 = 硬冲突，淘汰）。
 
-    剧集视频：候选集数不一致 → -1；集数精确匹配 +100；只有季号且同季 +30；
-    无任何集数/季号信息不给加成（由调用方用阈值挡掉动漫同名单集等错配）。
-    电影视频：候选带集数标记 → -1（电影不该挂剧集字幕）；
-    其余按去标签后的词元重合数计分。"""
+    剧集视频：候选集数不一致 → -1；集数精确匹配 100+词元重合（强信号，
+    即使描述没带剧名也认）；只有季号且同季 → 30+重合，但零重合 = 别剧同季
+    （搜 1923 出 Superman.And.Lois.S01 的教训），直接 -1；
+    无任何集数/季号信息只给词元重合分（调用方用门槛挡掉动漫同名单集）。
+    电影视频：候选带集数标记 → -1（电影不该挂剧集字幕）。"""
     vek, dek = _ep_key(video_stem), _ep_key(desc)
-    if vek or dek:
-        if not (vek and dek) or vek != dek:
-            if dek and vek:  # 两边都有集数但不一致
-                return -1
-            if dek and not vek:  # 电影挂剧集字幕
-                return -1
-            # 视频有集数、候选没有：看季号
-            vs, ds = _season_key(video_stem), _season_key(desc)
-            if ds is not None:
-                if vs is not None and ds != vs:
-                    return -1
-                bonus = 30  # 季包候选
-            else:
-                bonus = 0
-        else:
-            bonus = 100  # 集数精确匹配
-    else:
-        bonus = 0
     vt = set(_TOKEN_RE.findall(_TAG_RE.sub(" ", video_stem).lower()))
     dt = set(_TOKEN_RE.findall(_TAG_RE.sub(" ", desc).lower()))
-    return bonus + len(vt & dt)
+    ov = len(vt & dt)
+    if vek:
+        if dek:
+            return 100 + ov if vek == dek else -1
+        # 视频有集数、候选没有：看季号
+        vs, ds = _season_key(video_stem), _season_key(desc)
+        if ds is not None:
+            if vs is not None and ds != vs:
+                return -1
+            return 30 + ov if ov > 0 else -1
+        return ov
+    if dek:  # 电影挂剧集字幕
+        return -1
+    return ov
 
 
 def min_relevance(video_stem: str) -> int:
@@ -290,14 +286,23 @@ async def _search_candidates(client: httpx.AsyncClient, token: str,
     return subs
 
 
-def _pick_ep_name(names: list, video_stem: str) -> str:
-    """字幕包/多文件条目中挑与视频集数对应的那个文件；无集数信息取第一个。"""
+def _pick_ep_name(names: list, video_stem: str) -> str | None:
+    """字幕包/多文件条目中挑与视频集数对应的那个文件。
+    支持裸数字文件名（季包内 01.ass/02.ass 按集数编号对齐）；
+    多集包认不出集数时返回 None（宁缺毋错，不再错挂包内第一个）。"""
     vek = _ep_key(video_stem)
     if vek:
         for n in names:
             if _ep_key(Path(n).stem) == vek:
                 return n
-    return names[0]
+        want = int(re.search(r"e(\d{3})$", vek).group(1))
+        for n in names:
+            stem = Path(n).stem.strip()
+            if re.fullmatch(r"\d{1,3}", stem) and int(stem) == want:
+                return n
+        if len(names) > 1:
+            return None
+    return names[0] if names else None
 
 
 def _save_raw(video_path: Path, raw: bytes, suffix: str, lang: str) -> dict | None:
@@ -315,11 +320,39 @@ def _save_raw(video_path: Path, raw: bytes, suffix: str, lang: str) -> dict | No
                 if not names:
                     return None
                 names.sort(key=lambda n: Path(n).suffix.lower() not in (".vtt", ".srt"))
-                raw = z.read(_pick_ep_name(names, video_path.stem))
+                pick = _pick_ep_name(names, video_path.stem)
+                if pick is None:
+                    print(f"[subtitles] 季包内认不出对应集数，已拒收: {video_path.name}")
+                    return None
+                raw = z.read(pick)
         except zipfile.BadZipFile:
             return None
-    elif raw[:6] in (b"7z\xbc\xaf\x27\x1c", b"Rar!\x1a\x07\x00", b"Rar!\x1a\x07\x01") \
-            or raw[:2] == b"\x1f\x8b":
+    elif raw[:6] == b"7z\xbc\xaf\x27\x1c":  # 7z 字幕包（字幕站常见）
+        try:
+            import io
+            import tempfile
+            import py7zr
+            with py7zr.SevenZipFile(io.BytesIO(raw)) as z:
+                names = [n for n in z.namelist()
+                         if Path(n).suffix.lower() in SUB_EXTS
+                         and not Path(n).name.startswith(".")]
+                if not names:
+                    return None
+                names.sort(key=lambda n: Path(n).suffix.lower() not in (".vtt", ".srt"))
+                pick = _pick_ep_name(names, video_path.stem)
+                if pick is None:
+                    print(f"[subtitles] 季包内认不出对应集数，已拒收: {video_path.name}")
+                    return None
+                with tempfile.TemporaryDirectory() as td:
+                    z.extract(path=td, targets=[pick])
+                    raw = (Path(td) / pick).read_bytes()
+        except ImportError:
+            print("[subtitles] 缺少 py7zr，无法解 7z 字幕包，已拒收")
+            return None
+        except Exception as e:
+            print(f"[subtitles] 7z 解包失败: {type(e).__name__} {e}")
+            return None
+    elif raw[:6] in (b"Rar!\x1a\x07\x00", b"Rar!\x1a\x07\x01") or raw[:2] == b"\x1f\x8b":
         print(f"[subtitles] 无法解压的字幕包格式，已拒收: {video_path.name}")
         return None
     raw = _to_utf8(raw)
@@ -350,6 +383,9 @@ async def _download_one(client: httpx.AsyncClient, token: str, chosen: dict,
     if files:
         pick = _pick_ep_name([f.get("filename") or f.get("f") or "" for f in files],
                              video_path.stem)
+        if pick is None:
+            print(f"[subtitles] 季包内认不出对应集数，跳过: id={chosen['id']}")
+            return None
         f0 = next((f for f in files
                    if (f.get("filename") or f.get("f")) == pick), files[0])
         url = f0.get("url")
@@ -383,7 +419,7 @@ async def _get_json(client: httpx.AsyncClient, url: str, params: dict,
 
 async def _search(client: httpx.AsyncClient, token: str, q: str) -> list:
     j = await _get_json(client, f"{ASSRT}/sub/search",
-                        {"token": token, "q": q, "cnt": 10})
+                        {"token": token, "q": q, "cnt": 20})
     return ((j.get("sub") or {}).get("subs")) or []
 
 
