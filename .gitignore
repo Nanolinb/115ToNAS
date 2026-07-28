@@ -2,6 +2,7 @@
 config/
 .test/
 .venv/
+.venv*/
 
 # Python
 __pycache__/

@@ -2,6 +2,7 @@
 import asyncio
 import json
 import mimetypes
+import os
 import re
 import shutil
 import time
@@ -14,7 +15,12 @@ from fastapi.responses import (FileResponse, HTMLResponse, JSONResponse,
                                Response, StreamingResponse)
 from fastapi.staticfiles import StaticFiles
 
-from . import auth, baiduimg, db, downloader, scanner, subtitles, tmdb_client
+from . import db
+
+# cloud115 在模块加载时会读取已保存凭据；全新安装的空数据库必须先建表。
+db.init()
+
+from . import auth, baiduimg, downloader, scanner, subtitles, tmdb_client
 from .cloud115 import cloud, CloudError
 from .config import MEDIA_ROOT, POSTER_DIR
 
@@ -32,7 +38,8 @@ VIDEO_MIME = {
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
-    await downloader.start_worker()
+    if os.environ.get("MEDIAHUB_DISABLE_WORKERS") != "1":
+        await downloader.start_worker()
     yield
 
 
@@ -49,6 +56,8 @@ VIEWER_PREFIXES = ("/api/poster/", "/api/stream/", "/api/subtitle/",
 _VIEWER_MEDIA_RE = re.compile(r"^/api/media/\d+$")
 _VIEWER_PLAYLINK_RE = re.compile(r"^/api/media/\d+/playlink$")
 _VIEWER_TRACKS_RE = re.compile(r"^/api/media/\d+/tracks$")
+_VIEWER_PROGRESS_RE = re.compile(r"^/api/progress(?:/\d+)?$")
+_VIEWER_DEVICE_RE = re.compile(r"^/api/devices/register$")
 
 
 @app.middleware("http")
@@ -56,12 +65,17 @@ async def auth_middleware(request: Request, call_next):
     path = request.url.path
     if not path.startswith("/api/") or path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
-    is_viewer = request.method == "GET" and (
-        path in VIEWER_GET_EXACT
-        or bool(_VIEWER_MEDIA_RE.match(path))
-        or bool(_VIEWER_PLAYLINK_RE.match(path))
-        or bool(_VIEWER_TRACKS_RE.match(path))
-        or any(path.startswith(p) for p in VIEWER_PREFIXES)
+    is_viewer = (
+        (request.method == "GET" and (
+            path in VIEWER_GET_EXACT
+            or bool(_VIEWER_MEDIA_RE.match(path))
+            or bool(_VIEWER_PLAYLINK_RE.match(path))
+            or bool(_VIEWER_TRACKS_RE.match(path))
+            or any(path.startswith(p) for p in VIEWER_PREFIXES)
+        ))
+        or (request.method in ("GET", "POST")
+            and bool(_VIEWER_PROGRESS_RE.match(path)))
+        or (request.method == "POST" and bool(_VIEWER_DEVICE_RE.match(path)))
     )
     try:
         if is_viewer:
@@ -206,6 +220,9 @@ async def set_viewer_password(request: Request):
 
 # ---------------- 媒体库 ----------------
 
+_last_library_reconcile = 0.0
+_DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{8,80}$")
+
 def _entry_of_movie(row: dict) -> dict:
     return {
         "key": f"m{row['id']}", "kind": "movie", "id": row["id"],
@@ -219,7 +236,29 @@ def _entry_of_movie(row: dict) -> dict:
 
 @app.get("/api/library")
 async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
-    rows = db.q("SELECT * FROM media WHERE status='ok'")
+    # 电影可以直接在 SQL 层过滤；剧集必须先取完整分组，再按卡片元数据
+    # 过滤，否则同目录里只有部分集匹配关键字时会错误缩减集数。
+    movie_clauses = ["status='ok'", "type='movie'"]
+    movie_args: list = []
+    if year:
+        movie_clauses.append("year=?")
+        movie_args.append(year)
+    ql = q.strip().lower()
+    if ql:
+        movie_clauses.append("(LOWER(title) LIKE ? OR LOWER(name_cn) LIKE ?)")
+        like = f"%{ql}%"
+        movie_args.extend((like, like))
+    if genre:
+        movie_clauses.append("genres LIKE ?")
+        movie_args.append(f"%{genre}%")
+    rows = []
+    if type != "show":
+        rows.extend(db.q(
+            f"SELECT * FROM media WHERE {' AND '.join(movie_clauses)}",
+            movie_args))
+    if type != "movie":
+        rows.extend(db.q(
+            "SELECT * FROM media WHERE status='ok' AND type!='movie'"))
     # 防御：字幕等非视频路径的历史脏数据不上墙（scan_file 已拒绝入库）
     from .parser import is_video
     rows = [r for r in rows if is_video(r["path"])]
@@ -228,18 +267,25 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
     from . import scanner as _sc
     roots_cfg = [p.resolve() for p in (_sc.movie_dir(), _sc.tv_dir())]
     roots_up = [p for p in roots_cfg if p.exists()]
-    stale = []
-    for r in rows:
-        p = Path(r["path"])
-        under = [root for root in roots_cfg if p == root or root in p.parents]
-        if not under or (any(root in roots_up for root in under)
-                         and not p.exists()):
-            stale.append(r["id"])
-    if stale:
-        db.exe(f"UPDATE media SET status='missing' "
-               f"WHERE id IN ({','.join('?' * len(stale))})", stale)
-        gone = set(stale)
-        rows = [r for r in rows if r["id"] not in gone]
+    # 大媒体库不应在每次打开首页时对每个文件做 stat；最多每 5 分钟抽查一次。
+    global _last_library_reconcile
+    if time.monotonic() - _last_library_reconcile > 300:
+        _last_library_reconcile = time.monotonic()
+        stale = []
+        for r in rows:
+            p = Path(r["path"])
+            # 挂载点或 macOS /var→/private/var 可能含符号链接，统一解析后比较。
+            resolved = p.resolve(strict=False)
+            under = [root for root in roots_cfg
+                     if resolved == root or root in resolved.parents]
+            if not under or (any(root in roots_up for root in under)
+                             and not p.exists()):
+                stale.append(r["id"])
+        if stale:
+            db.exe(f"UPDATE media SET status='missing' "
+                   f"WHERE id IN ({','.join('?' * len(stale))})", stale)
+            gone = set(stale)
+            rows = [r for r in rows if r["id"] not in gone]
     movies, shows = [], {}
     tv_root = _sc.tv_dir().resolve()
     for r in rows:
@@ -317,17 +363,26 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
                 show["title"] = info["title"]
 
     entries = movies + list(shows.values())
-
-    ql = q.strip().lower()
-    if ql:
-        entries = [e for e in entries if ql in (e["title"] or "").lower()
-                   or ql in (e["name_cn"] or "").lower()]
-    if type in ("movie", "show"):
-        entries = [e for e in entries if e["kind"] == type]
-    if year:
-        entries = [e for e in entries if e["year"] == year]
-    if genre:
-        entries = [e for e in entries if genre in (e["genres"] or "")]
+    if type != "movie":
+        def show_matches(entry: dict) -> bool:
+            if entry["kind"] != "show":
+                return True  # 电影已在 SQL 层过滤
+            if ql and ql not in (entry["title"] or "").lower() \
+                    and ql not in (entry["name_cn"] or "").lower():
+                return False
+            if year and entry["year"] != year:
+                return False
+            if genre and genre not in (entry["genres"] or ""):
+                return False
+            return True
+        entries = [entry for entry in entries if show_matches(entry)]
+    # 数据库可能保留已清理的旧缓存文件名；前端拿到空值即可显示占位并
+    # 为 Hero 选择下一条有图项目，避免 404 后留下纯黑舞台。
+    for entry in entries:
+        for field in ("poster", "backdrop"):
+            name = entry.get(field)
+            if name and not (POSTER_DIR / Path(name).name).is_file():
+                entry[field] = None
 
     # 季标：一律标注第N季（季号来自文件名解析的 Sxx）
     for e in entries:
@@ -349,6 +404,82 @@ async def library(q: str = "", type: str = "", year: int = 0, genre: str = ""):
         from . import overview as _ov
         _ov.schedule_fill(missing[:20])
     return {"items": entries, "total": len(entries)}
+
+
+# ---------------- 设备档案与跨设备续播 ----------------
+
+@app.post("/api/devices/register")
+async def register_device(request: Request):
+    body = await request.json()
+    device_id = str(body.get("id") or "")[:80]
+    if not _DEVICE_ID_RE.match(device_id):
+        raise HTTPException(400, "设备标识无效")
+    caps = body.get("capabilities") or {}
+    caps_json = json.dumps(caps, ensure_ascii=False, separators=(",", ":"))
+    if len(caps_json.encode()) > 16 * 1024:
+        raise HTTPException(413, "设备能力数据过大")
+    db.exe("""INSERT INTO devices(id,name,platform,capabilities,last_seen)
+              VALUES(?,?,?,?,?)
+              ON CONFLICT(id) DO UPDATE SET name=excluded.name,
+              platform=excluded.platform,capabilities=excluded.capabilities,
+              last_seen=excluded.last_seen""",
+           (device_id, str(body.get("name") or "")[:120],
+            str(body.get("platform") or "android_tv")[:40],
+            caps_json, db.now()))
+    return {"ok": True}
+
+
+@app.get("/api/progress")
+async def list_progress(limit: int = 12):
+    limit = min(max(limit, 1), 50)
+    rows = db.q("""SELECT p.media_id,p.device_id,p.position_ms,p.duration_ms,
+                          p.completed,p.updated_at
+                   FROM watch_progress p
+                   JOIN media m ON m.id=p.media_id
+                   WHERE p.profile_key='default' AND p.completed=0
+                     AND p.position_ms>30000 AND m.status='ok'
+                   ORDER BY p.updated_at DESC LIMIT ?""", (limit,))
+    return {"items": rows}
+
+
+@app.get("/api/progress/{media_id}")
+async def get_progress(media_id: int):
+    row = db.one("""SELECT media_id,device_id,position_ms,duration_ms,
+                           completed,updated_at
+                    FROM watch_progress
+                    WHERE profile_key='default' AND media_id=?""", (media_id,))
+    return row or {"media_id": media_id, "position_ms": 0,
+                   "duration_ms": 0, "completed": 0}
+
+
+@app.post("/api/progress/{media_id}")
+async def save_progress(media_id: int, request: Request):
+    if not db.one("SELECT id FROM media WHERE id=?", (media_id,)):
+        raise HTTPException(404, "not found")
+    body = await request.json()
+    try:
+        position = max(0, int(body.get("position_ms") or 0))
+        duration = max(0, int(body.get("duration_ms") or 0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "播放进度无效")
+    completed = bool(body.get("completed")) or (
+        duration > 0 and duration - position <= 60_000)
+    device_id = str(body.get("device_id") or "")[:80]
+    if device_id and not _DEVICE_ID_RE.match(device_id):
+        raise HTTPException(400, "设备标识无效")
+    db.exe("""INSERT INTO watch_progress(
+                    profile_key,media_id,device_id,position_ms,duration_ms,
+                    completed,updated_at)
+              VALUES('default',?,?,?,?,?,?)
+              ON CONFLICT(profile_key,media_id) DO UPDATE SET
+                    device_id=excluded.device_id,
+                    position_ms=excluded.position_ms,
+                    duration_ms=excluded.duration_ms,
+                    completed=excluded.completed,
+                    updated_at=excluded.updated_at""",
+           (media_id, device_id, 0 if completed else position, duration,
+            1 if completed else 0, db.now()))
+    return {"ok": True, "completed": completed}
 
 
 @app.get("/api/media/{media_id}")

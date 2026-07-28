@@ -4,7 +4,19 @@
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => Array.from(document.querySelectorAll(s));
 
+let MEDIAHUB_DEVICE = null;
+try {
+  if (window.MediaHubNative && typeof MediaHubNative.getDeviceProfile === 'function') {
+    MEDIAHUB_DEVICE = JSON.parse(MediaHubNative.getDeviceProfile() || 'null');
+  }
+} catch (e) {
+  MEDIAHUB_DEVICE = null;
+}
+
 async function api(path, opts = {}) {
+  if (MEDIAHUB_DEVICE && MEDIAHUB_DEVICE.id) {
+    opts.headers = { 'X-MediaHub-Device': MEDIAHUB_DEVICE.id, ...(opts.headers || {}) };
+  }
   if (opts.body && typeof opts.body !== 'string') {
     opts.body = JSON.stringify(opts.body);
     opts.headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
@@ -21,6 +33,15 @@ async function api(path, opts = {}) {
     throw new Error(msg);
   }
   return r.json();
+}
+
+async function registerDevice() {
+  if (!MEDIAHUB_DEVICE || !MEDIAHUB_DEVICE.id) return;
+  try {
+    await api('/api/devices/register', { method: 'POST', body: MEDIAHUB_DEVICE });
+  } catch (e) {
+    // 设备档案是旁路能力，NAS 旧版本或临时离线不阻断影片墙。
+  }
 }
 
 function toast(msg, ms = 2200) {

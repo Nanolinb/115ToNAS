@@ -294,6 +294,7 @@ async function boot() {
     const st = await api('/api/auth/status');
     state.adminAuthed = st.authed;
   } catch (e) { state.adminAuthed = false; }
+  registerDevice();
   loadLibrary().catch((e) => {
     if (e.unauthorized) { $('#loginMask').classList.remove('hidden'); }
   });

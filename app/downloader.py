@@ -8,8 +8,9 @@ from pathlib import Path
 import httpx
 
 from . import db
-from .cloud115 import cloud, CloudError
+from .cloud115 import CloudError
 from .config import UA
+from .providers import get_provider
 
 _cancel_flags: dict[str, str] = {}  # task_id -> 'pause' | 'cancel'
 _worker_task: asyncio.Task | None = None
@@ -24,37 +25,44 @@ def _speed_limit() -> int:
         return 0
 
 
-def add_tasks(items: list[dict], target_dir: str) -> tuple[int, int]:
+def add_tasks(items: list[dict], target_dir: str, provider: str = "115",
+              account_id: str = "default") -> tuple[int, int]:
     """返回 (新增数, 跳过数)。跳过：队列中已有同 pickcode 任务，
     或下载历史里已下载且文件仍在磁盘上（清空下载记录后也不重复下载）。"""
+    get_provider(provider)  # 入队时即拒绝未知来源，避免任务到 worker 才失败
     added = skipped = 0
     for it in items:
         pc = it.get("pickcode") or ""
+        history_key = pc if provider == "115" and account_id == "default" else \
+            f"{provider}:{account_id}:{pc}"
         # 同名任务（下载中/排队中）跳过
-        dup = db.one("SELECT id FROM tasks WHERE pickcode=? AND status IN ('queued','downloading','paused')",
-                     (pc,))
+        dup = db.one("""SELECT id FROM tasks
+                        WHERE pickcode=? AND provider=? AND account_id=?
+                          AND status IN ('queued','downloading','paused')""",
+                     (pc, provider, account_id))
         if dup:
             skipped += 1
             continue
         # 历史已下载且文件仍在 → 跳过；文件已被人为删除 → 清掉失效记录，允许重下
         if pc:
-            h = db.one("SELECT path FROM downloads WHERE pickcode=?", (pc,))
+            h = db.one("SELECT path FROM downloads WHERE pickcode=?", (history_key,))
             if h:
                 if Path(h["path"]).exists():
                     skipped += 1
                     continue
-                db.exe("DELETE FROM downloads WHERE pickcode=?", (pc,))
+                db.exe("DELETE FROM downloads WHERE pickcode=?", (history_key,))
         # rel：还原 115 目录结构（如 剧集名/Season 1），防目录穿越
         rel = (it.get("rel") or "").strip("/")
         if rel and ".." not in rel.split("/"):
             tdir = str(Path(target_dir) / rel)
         else:
             tdir = target_dir
-        db.exe("""INSERT INTO tasks(id,name,pickcode,file_id,target_dir,size,status,created_at,updated_at)
-                  VALUES(?,?,?,?,?,?,'queued',?,?)""",
+        db.exe("""INSERT INTO tasks(id,name,pickcode,file_id,target_dir,size,status,
+                                    created_at,updated_at,provider,account_id)
+                  VALUES(?,?,?,?,?,?,'queued',?,?,?,?)""",
                (uuid.uuid4().hex[:12], it["name"], pc,
                 str(it.get("id", "")), tdir, it.get("size", 0),
-                db.now(), db.now()))
+                db.now(), db.now(), provider, account_id))
         added += 1
     return added, skipped
 
@@ -182,9 +190,14 @@ async def _download(task: dict):
     db.exe("UPDATE tasks SET status='downloading', error='', updated_at=? WHERE id=?",
            (db.now(), tid))
 
-    if not await asyncio.to_thread(cloud.is_logged_in):
-        raise CloudError("115 未登录，请先在网页端扫码登录")
-    url = await cloud.get_download_url(task["pickcode"])
+    provider_name = task.get("provider") or "115"
+    try:
+        provider = get_provider(provider_name)
+    except ValueError as exc:
+        raise CloudError(str(exc)) from exc
+    if not await provider.is_logged_in():
+        raise CloudError(f"{provider_name} 未登录，请先在管理端完成登录")
+    url = await provider.get_download_url(task["pickcode"])
 
     target_dir = Path(task["target_dir"])
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -246,10 +259,16 @@ async def _download(task: dict):
 
     # 写入下载历史（防重复下载的持久依据，清空任务记录后仍有效）
     if task["pickcode"]:
-        db.exe("""INSERT INTO downloads(pickcode,name,path,size,done_at) VALUES(?,?,?,?,?)
+        account_id = task.get("account_id") or "default"
+        history_key = task["pickcode"] if provider_name == "115" and account_id == "default" else \
+            f"{provider_name}:{account_id}:{task['pickcode']}"
+        db.exe("""INSERT INTO downloads(pickcode,name,path,size,done_at,provider,account_id)
+                  VALUES(?,?,?,?,?,?,?)
                   ON CONFLICT(pickcode) DO UPDATE SET name=excluded.name,
-                  path=excluded.path, size=excluded.size, done_at=excluded.done_at""",
-               (task["pickcode"], task["name"], str(dest), total, db.now()))
+                  path=excluded.path, size=excluded.size, done_at=excluded.done_at,
+                  provider=excluded.provider, account_id=excluded.account_id""",
+               (history_key, task["name"], str(dest), total, db.now(),
+                provider_name, account_id))
 
     # 下载完成 → 若落在媒体库目录内，立即扫描该文件
     if db.get_setting("auto_scan", "1") == "1":
