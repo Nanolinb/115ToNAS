@@ -353,7 +353,8 @@
       const cur = focused();
       if (items.length && (!cur || items.indexOf(cur) < 0)) {
         const primary = items.filter((el) => el.classList.contains('primary'))[0];
-        setFocus(primary || items[0]);
+        const pill = items.filter((el) => el.classList.contains('ep-pill'))[0];
+        setFocus(primary || pill || items[0]);
       }
     }, 0);
   });

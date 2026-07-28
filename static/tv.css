@@ -136,6 +136,18 @@ body.tv-mode .ep-row.tv-focus {
 body.tv-mode .ep-row.tv-focus .ep-label { color: #fff; font-weight: 700; }
 body.tv-mode .ep-row:active { background: rgba(255,255,255,.22); }
 
+/* 集数数字方框：浅灰圆角，遥控器聚焦 = 近白亮灰 + 2px 橙色外圈 */
+body.tv-mode .ep-pills { gap: 14px; padding: 4px 28px 22px; margin-top: 14px; }
+body.tv-mode .ep-pill {
+  min-width: 60px; height: 46px; padding: 0 16px; border-radius: 12px;
+  background: rgba(255,255,255,.14); color: rgba(255,255,255,.75); font-size: 17px;
+}
+body.tv-mode .ep-pill.tv-focus {
+  background: rgba(255,255,255,.92); color: #141414;
+  box-shadow: 0 0 0 2px var(--accent);
+}
+body.tv-mode .ep-pill:active { background: rgba(255,255,255,.7); }
+
 /* ---------- 播放器弹窗（TV 上基本不用，保底放大字号） ---------- */
 body.tv-mode .player-bar { font-size: 15px; }
 body.tv-mode .player-bar .btn { border-radius: 999px; padding: 8px 18px; }

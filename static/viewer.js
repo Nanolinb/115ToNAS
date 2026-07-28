@@ -107,16 +107,23 @@ async function openDetail(key) {
       </div>
     </div>`;
   if (e.kind === 'show') {
-    html += `<div class="ep-list">` + e.episodes.map((ep) => `
-      <div class="ep-row" data-playrow="${ep.id}">
-        <span class="ep-label">S${String(ep.season).padStart(2, '0')}E${String(ep.episode || '?').padStart(2, '0')}</span>
-        <span class="ep-name">${esc(ep.name)}</span>
-        <span class="dot ${ep.has_sub ? 'g' : (ep.sub_status === 'failed' ? 'r' : 'y')}"
-              title="${ep.has_sub ? '有字幕' : (ep.sub_status === 'failed' ? '字幕未找到' : '无字幕')}"></span>
-        <span class="fsize">${fmtSize(ep.size)}</span>
-        <button class="btn small primary" data-play="${ep.id}"><i class="tri"></i></button>
-        ${state.adminAuthed ? `<button class="btn small" data-subs="${ep.id}">字幕</button>` : ''}
-      </div>`).join('') + `</div>`;
+    if (state.adminAuthed) {
+      // 管理端保留信息密集的维护视图（字幕状态/大小/搜索字幕按钮）
+      html += `<div class="ep-list">` + e.episodes.map((ep) => `
+        <div class="ep-row" data-playrow="${ep.id}">
+          <span class="ep-label">S${String(ep.season).padStart(2, '0')}E${String(ep.episode || '?').padStart(2, '0')}</span>
+          <span class="ep-name">${esc(ep.name)}</span>
+          <span class="dot ${ep.has_sub ? 'g' : (ep.sub_status === 'failed' ? 'r' : 'y')}"
+                title="${ep.has_sub ? '有字幕' : (ep.sub_status === 'failed' ? '字幕未找到' : '无字幕')}"></span>
+          <span class="fsize">${fmtSize(ep.size)}</span>
+          <button class="btn small primary" data-play="${ep.id}"><i class="tri"></i></button>
+          <button class="btn small" data-subs="${ep.id}">字幕</button>
+        </div>`).join('') + `</div>`;
+    } else {
+      // 观影端：纯集数数字方框，点哪集看哪集
+      html += `<div class="ep-pills">` + e.episodes.map((ep) => `
+        <button class="ep-pill" data-play="${ep.id}">${String(ep.episode || '?').padStart(2, '0')}</button>`).join('') + `</div>`;
+    }
   }
   modal.innerHTML = `<div class="mhead"><h3></h3><button class="mclose" data-close="detailMask"><svg class="x-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" fill="none"/></svg></button></div>` + html;
   $('#detailMask').classList.remove('hidden');
