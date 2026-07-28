@@ -4,12 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>115 影库 · 管理端</title>
-<link rel="stylesheet" href="/static/style.css?v=1.19.2">
+<link rel="stylesheet" href="/static/style.css?v=1.19.4">
 </head>
 <body>
 
 <div class="topbar">
-  <div class="logo">🎬 115影库<small>管理端</small></div>
+  <div class="logo"><svg class="logo-ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5c-.6 0-1 .4-1 1v12c0 .6.4 1 1 1h18c.6 0 1-.4 1-1V6c0-.6-.4-1-1-1H3zm1 13v-2h2v2H4zm0-4v-2h2v2H4zm0-4V8h2v2H4zm14 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4V8h2v2h-2zm2 8v-2h1v2h-1zm0-4v-2h1v2h-1zm0-4V8h1v2h-1zM4.5 3.2l15 2c.5.1.8.6.6 1l-.3.6H5.9l-1.7-2.3c-.2-.5-.3-1.2.3-1.3z"/></svg>115影库<small>管理端</small></div>
   <nav class="tabs">
     <button class="tab active" data-tab="cloud">115 网盘</button>
     <button class="tab" data-tab="tasks">下载任务 <span id="taskBadge"></span></button>
@@ -170,7 +170,7 @@
 <!-- 管理端登录 -->
 <div class="login-mask hidden" id="loginMask">
   <div class="login-box">
-    <h1>🎬 管理端</h1>
+    <h1><svg class="logo-ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5c-.6 0-1 .4-1 1v12c0 .6.4 1 1 1h18c.6 0 1-.4 1-1V6c0-.6-.4-1-1-1H3zm1 13v-2h2v2H4zm0-4v-2h2v2H4zm0-4V8h2v2H4zm14 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4V8h2v2h-2zm2 8v-2h1v2h-1zm0-4v-2h1v2h-1zm0-4V8h1v2h-1zM4.5 3.2l15 2c.5.1.8.6.6 1l-.3.6H5.9l-1.7-2.3c-.2-.5-.3-1.2.3-1.3z"/></svg>管理端</h1>
     <p id="loginHint">输入管理密码</p>
     <input type="password" id="loginPw" placeholder="密码" autocomplete="current-password">
     <button class="btn primary" id="btnLogin">进入</button>
@@ -181,7 +181,7 @@
 <!-- 目录选择弹窗 -->
 <div class="modal-mask hidden" id="dirMask">
   <div class="modal" style="max-width:520px">
-    <div class="mhead"><h3>选择目录</h3><button class="mclose" data-close="dirMask">✕</button></div>
+    <div class="mhead"><h3>选择目录</h3><button class="mclose" data-close="dirMask"><svg class="x-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" fill="none"/></svg></button></div>
     <div class="mbody">
       <div class="dir-current" id="dirCurrent"></div>
       <div class="dir-list" id="dirList"></div>
@@ -196,8 +196,8 @@
   </div>
 </div>
 
-<script src="/static/common.js?v=1.19.2"></script>
-<script src="/static/admin.js?v=1.19.2"></script>
-<div class="ver-tag">v1.19.2</div>
+<script src="/static/common.js?v=1.19.4"></script>
+<script src="/static/admin.js?v=1.19.4"></script>
+<div class="ver-tag">v1.19.4</div>
 </body>
 </html>

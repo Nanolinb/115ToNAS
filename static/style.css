@@ -122,6 +122,8 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .modal .mbody { padding: 18px; }
 .mclose { background: none; border: none; color: var(--muted); font-size: 22px; line-height: 1; }
 .mclose:hover { color: var(--text); }
+/* TV 字体缺 ✕ 字形：内联 SVG 关闭图标（currentColor 跟随按钮色） */
+.x-ic { width: 16px; height: 16px; display: block; margin: auto; }
 
 /* 背景图：300px 横条左右顶满弹窗，取封面人物脸部带（约 1/5~1/2 处），底部渐隐 */
 .detail-hero { position: relative; height: 300px; overflow: hidden; border-radius: 14px 14px 0 0; }
@@ -141,6 +143,7 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .ep-row {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 18px; border-top: 1px solid var(--border); font-size: 13px;
+  cursor: pointer;
 }
 .ep-row .ep-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #c4ccd8; }
 .ep-row .ep-label { color: var(--accent2); font-weight: 600; white-space: nowrap; }
@@ -285,3 +288,5 @@ input.warn::placeholder { color: rgba(224, 93, 93, .75); }
   outline-offset: 2px; border-radius: 10px;
   box-shadow: 0 0 18px rgba(245,197,24,.45);
 }
+/* 场记板 logo：TV 字体缺 emoji，内联 SVG */
+.logo-ic { width: 19px; height: 19px; vertical-align: -3px; margin-right: 6px; }

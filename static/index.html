@@ -5,13 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>115 影库</title>
-<link rel="stylesheet" href="/static/style.css?v=1.19.2">
-<link rel="stylesheet" href="/static/tv.css?v=1.19.2">
+<link rel="stylesheet" href="/static/style.css?v=1.19.4">
+<link rel="stylesheet" href="/static/tv.css?v=1.19.4">
 </head>
 <body>
 
 <div class="topbar">
-  <div class="logo">🎬 115影库</div>
+  <div class="logo"><svg class="logo-ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5c-.6 0-1 .4-1 1v12c0 .6.4 1 1 1h18c.6 0 1-.4 1-1V6c0-.6-.4-1-1-1H3zm1 13v-2h2v2H4zm0-4v-2h2v2H4zm0-4V8h2v2H4zm14 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4V8h2v2h-2zm2 8v-2h1v2h-1zm0-4v-2h1v2h-1zm0-4V8h1v2h-1zM4.5 3.2l15 2c.5.1.8.6.6 1l-.3.6H5.9l-1.7-2.3c-.2-.5-.3-1.2.3-1.3z"/></svg>115影库</div>
   <span style="flex:1"></span>
   <a class="tab" href="/admin" style="text-decoration:none"><svg class="gear-ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>管理</a>
 </div>
@@ -39,7 +39,7 @@
 <!-- 观影密码登录（仅当管理端设置了观影密码时出现） -->
 <div class="login-mask hidden" id="loginMask">
   <div class="login-box">
-    <h1>🎬 115影库</h1>
+    <h1><svg class="logo-ic" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5c-.6 0-1 .4-1 1v12c0 .6.4 1 1 1h18c.6 0 1-.4 1-1V6c0-.6-.4-1-1-1H3zm1 13v-2h2v2H4zm0-4v-2h2v2H4zm0-4V8h2v2H4zm14 8h-2v-2h2v2zm0-4h-2v-2h2v2zm0-4V8h2v2h-2zm2 8v-2h1v2h-1zm0-4v-2h1v2h-1zm0-4V8h1v2h-1zM4.5 3.2l15 2c.5.1.8.6.6 1l-.3.6H5.9l-1.7-2.3c-.2-.5-.3-1.2.3-1.3z"/></svg>115影库</h1>
     <p>输入观影密码</p>
     <input type="password" id="loginPw" placeholder="观影密码" autocomplete="current-password">
     <button class="btn primary" id="btnLogin">进入</button>
@@ -71,15 +71,14 @@
       <button class="btn small hidden" id="btnPrevEp">上一集</button>
       <button class="btn small hidden" id="btnNextEp">下一集</button>
       <button class="btn small" id="btnCopyLink">复制直链</button>
-      <button class="btn small" id="btnClosePlayer">关闭</button>
     </div>
     <div id="playerPlaylist" class="hidden playlist-panel"></div>
   </div>
 </div>
 
-<script src="/static/common.js?v=1.19.2"></script>
-<script src="/static/viewer.js?v=1.19.2"></script>
-<script src="/static/tvnav.js?v=1.19.2"></script>
-<div class="ver-tag">v1.19.2</div>
+<script src="/static/common.js?v=1.19.4"></script>
+<script src="/static/viewer.js?v=1.19.4"></script>
+<script src="/static/tvnav.js?v=1.19.4"></script>
+<div class="ver-tag">v1.19.4</div>
 </body>
 </html>

@@ -108,7 +108,7 @@ async function openDetail(key) {
     </div>`;
   if (e.kind === 'show') {
     html += `<div class="ep-list">` + e.episodes.map((ep) => `
-      <div class="ep-row">
+      <div class="ep-row" data-playrow="${ep.id}">
         <span class="ep-label">S${String(ep.season).padStart(2, '0')}E${String(ep.episode || '?').padStart(2, '0')}</span>
         <span class="ep-name">${esc(ep.name)}</span>
         <span class="dot ${ep.has_sub ? 'g' : (ep.sub_status === 'failed' ? 'r' : 'y')}"
@@ -118,13 +118,17 @@ async function openDetail(key) {
         ${state.adminAuthed ? `<button class="btn small" data-subs="${ep.id}">字幕</button>` : ''}
       </div>`).join('') + `</div>`;
   }
-  modal.innerHTML = `<div class="mhead"><h3></h3><button class="mclose" data-close="detailMask">✕</button></div>` + html;
+  modal.innerHTML = `<div class="mhead"><h3></h3><button class="mclose" data-close="detailMask"><svg class="x-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" fill="none"/></svg></button></div>` + html;
   $('#detailMask').classList.remove('hidden');
 
   modal.querySelectorAll('[data-play]').forEach((b) =>
-    b.addEventListener('click', () => playMedia(+b.dataset.play)));
+    b.addEventListener('click', (ev) => { ev.stopPropagation(); playMedia(+b.dataset.play); }));
+  // 整行可点 = 播放该集（电视遥控器按行聚焦、确认键起播；网页同样受益）
+  modal.querySelectorAll('[data-playrow]').forEach((row) =>
+    row.addEventListener('click', () => playMedia(+row.dataset.playrow)));
   modal.querySelectorAll('[data-subs]').forEach((b) =>
-    b.addEventListener('click', async () => {
+    b.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
       b.disabled = true; b.textContent = '搜索中…';
       try {
         const r = await api(`/api/media/${b.dataset.subs}/subtitle`, { method: 'POST' });
@@ -171,7 +175,7 @@ async function openDetail(key) {
 async function openPosterPicker(mediaId) {
   const SRC_LABEL = { subhd: 'SubHD', douban: '豆瓣', baidu: '百度' };
   const modal = $('#detailModal');
-  modal.innerHTML = `<div class="mhead"><h3>点选一张，再按「设为封面」确认</h3><button class="mclose" data-close="detailMask">✕</button></div>
+  modal.innerHTML = `<div class="mhead"><h3>点选一张，再按「设为封面」确认</h3><button class="mclose" data-close="detailMask"><svg class="x-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" fill="none"/></svg></button></div>
     <div class="mbody">
     <div style="display:flex;gap:8px;margin-bottom:12px">
       <input data-kw type="text" placeholder="搜图关键词（留空自动用文件名解析）"
@@ -258,7 +262,7 @@ async function openRematch(mediaId) {
   } catch (e) { toast(e.message); return; }
   if (!cands.length) { toast('没有搜索结果（确认已配置 TMDB Key）'); return; }
   const modal = $('#detailModal');
-  modal.innerHTML = `<div class="mhead"><h3>选择正确的影片</h3><button class="mclose" data-close="detailMask">✕</button></div>
+  modal.innerHTML = `<div class="mhead"><h3>选择正确的影片</h3><button class="mclose" data-close="detailMask"><svg class="x-ic" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" fill="none"/></svg></button></div>
     <div class="mbody">` + cands.map((c) => `
     <div class="ep-row" style="border:1px solid var(--border);border-radius:8px;margin-bottom:8px">
       ${c.poster_url ? `<img src="${c.poster_url}" style="width:40px;border-radius:4px">` : '<span style="width:40px"></span>'}
@@ -309,7 +313,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     $('#' + id).addEventListener('change', loadLibrary));
   $('#btnLogin').addEventListener('click', doViewerLogin);
   $('#loginPw').addEventListener('keydown', (e) => { if (e.key === 'Enter') doViewerLogin(); });
-  $('#btnClosePlayer').addEventListener('click', closePlayer);
   $('#btnPlaylist').addEventListener('click', () =>
     $('#playerPlaylist').classList.toggle('hidden'));
   $('#playerMask').addEventListener('click', (e) => { if (e.target.id === 'playerMask') closePlayer(); });

@@ -219,7 +219,10 @@
     const masks = $all('.modal-mask').filter(isVis);
     if (masks.length) {
       const top = masks[masks.length - 1];
-      return $all('button, input, select, [data-pick], [data-confirm]', top).filter(isVis);
+      // 剧集行整行作为一个焦点项（行内小按钮不再单独聚焦，避免横向噪音）
+      return $all('button, input, select, [data-pick], [data-confirm], .ep-row', top)
+        .filter((el) => isVis(el) &&
+          (el.classList.contains('ep-row') || !el.closest('.ep-row')));
     }
     if (home) {
       return $all('.rail-row, .tv-tab, .hc-watch, .tcard', home).filter(isVis);
