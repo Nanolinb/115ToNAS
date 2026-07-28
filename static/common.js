@@ -101,7 +101,7 @@ async function playMedia(id) {
   }
 
   const video = $('#playerVideo');
-  if (video.dataset.mid && +video.dataset.mid !== id) savePos(video, +video.dataset.mid);
+  if (video.dataset.mid && +video.dataset.mid !== id) savePos(video, +video.dataset.mid, true);
   video.innerHTML = '';
   // 多语言字幕轨道：中文 / English / 中英双语，浏览器原生 CC 菜单切换
   (d.subs || []).forEach((t, i) => {
@@ -304,6 +304,31 @@ async function transcodeAt(video, id, abs) {
 
 /* ---------- 续播（记住上次播放位置） ---------- */
 
+// 跨设备续播：页面加载后预取服务端进度到 window.__srvProg（{id: 秒}）；
+// 失败静默，退回各设备本地 localStorage 行为
+window.__srvProg = {};
+fetch('/api/progress').then(function (r) {
+  return r.ok ? r.json() : null;
+}).then(function (m) {
+  if (m) window.__srvProg = m;
+}).catch(function () {});
+
+// 服务端同步节流：每个 id 最多 10 秒一次（savePos 本身已被调用方 5 秒节流）；
+// force（关播放器最后一次）与 pos<=0（播完清除）必发
+const _srvPosLast = {};
+function syncPosServer(id, sec, force) {
+  const now = Date.now();
+  if (!force && sec > 0 && now - (_srvPosLast[id] || 0) < 10000) return;
+  _srvPosLast[id] = now;
+  if (sec > 0) window.__srvProg[String(id)] = sec;
+  else delete window.__srvProg[String(id)];
+  fetch(`/api/progress/${id}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pos: sec }),
+  }).catch(function () {});
+}
+
 function fmtTime(s) {
   s = Math.max(0, Math.floor(s));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), ss = s % 60;
@@ -311,17 +336,22 @@ function fmtTime(s) {
   return (h ? h + ':' : '') + mm + ':' + String(ss).padStart(2, '0');
 }
 
-// 进度存浏览器 localStorage（mh_pos_<id>）：每台设备各记各的，30 秒以内不记，快播完自动清
-function savePos(video, id) {
+// 进度本地存 localStorage（mh_pos_<id>）做离线兜底，同时同步服务端跨设备共享；
+// 30 秒以内不记，快播完自动清
+function savePos(video, id, force) {
   const t = video.currentTime || 0;
   // 时长优先用后端准确值（坏头 MKV 的 video.duration 不可信）；换算成绝对位置
   const d = parseFloat(video.dataset.total || '0') || video.duration || 0;
   const abs = parseFloat(video.dataset.base || '0') + t;
   const key = `mh_pos_${id}`;
-  try {
-    if (d && d - abs <= 60) localStorage.removeItem(key);
-    else if (abs > 30) localStorage.setItem(key, String(Math.floor(abs)));
-  } catch (e) {}
+  if (d && d - abs <= 60) {
+    try { localStorage.removeItem(key); } catch (e) {}
+    syncPosServer(id, 0, force);
+  } else if (abs > 30) {
+    const sec = Math.floor(abs);
+    try { localStorage.setItem(key, String(sec)); } catch (e) {}
+    syncPosServer(id, sec, force);
+  }
 }
 
 function setupResume(video, id) {
@@ -336,10 +366,12 @@ function setupResume(video, id) {
     savePos(video, id);
   };
   // 上次看到 30 秒以上 → 弹询问条：继续播放 / 从头开始
+  // 有效进度 = max(本地 localStorage, 服务端跨设备共享)
   const promptEl = $('#resumePrompt');
   if (!promptEl) return;
   let saved = 0;
   try { saved = parseInt(localStorage.getItem(`mh_pos_${id}`) || '0', 10) || 0; } catch (e) {}
+  saved = Math.max(saved, Math.floor(Number(window.__srvProg[String(id)]) || 0));
   if (saved <= 30) { promptEl.classList.add('hidden'); return; }
   $('#resumeText').textContent = `上次看到 ${fmtTime(saved)}，是否从上次的位置开始？`;
   promptEl.classList.remove('hidden');
@@ -360,6 +392,7 @@ function setupResume(video, id) {
     clearTimeout(hideTimer);
     promptEl.classList.add('hidden');
     try { localStorage.removeItem(`mh_pos_${id}`); } catch (e) {}
+    syncPosServer(id, 0, true); // 「从头开始」本地/服务端一起清
     video.currentTime = 0;
     video.play().catch(() => {});
   };
@@ -405,7 +438,7 @@ function setupEpisodeList(currentId) {
 
 function closePlayer() {
   const v = $('#playerVideo');
-  if (v.dataset.mid) savePos(v, +v.dataset.mid);
+  if (v.dataset.mid) savePos(v, +v.dataset.mid, true); // 关播放器最后一次同步必发
   v.pause(); v.removeAttribute('src'); v.load();
   v.ontimeupdate = null; v.onseeking = null; v.onloadedmetadata = null; v._aligning = false;
   const panel = $('#playerPlaylist');

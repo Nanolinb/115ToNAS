@@ -16,7 +16,7 @@ import android.webkit.WebViewClient;
 import android.widget.EditText;
 
 /**
- * 115影库 · 观影端 TV 壳：
+ * Dash Spark Media · 观影端 TV 壳：
  * - WebView 加载 NAS 上的观影页（海报墙/搜索/过滤）
  * - 播放走内嵌 ExoPlayer（应用内全屏，电视/投影硬解，可选音轨/字幕，
  *   音轨解不了自动回落服务端 AAC 转码），不跳外部 App
@@ -78,7 +78,7 @@ public class MainActivity extends Activity {
         new AlertDialog.Builder(this)
                 .setTitle("NAS 服务器地址")
                 .setMessage(err == null
-                        ? "首次使用，请输入 115影库 在 NAS 上的地址："
+                        ? "首次使用，请输入 Dash Spark Media 在 NAS 上的地址："
                         : err + "\n\n请确认地址：")
                 .setView(input)
                 .setPositiveButton("连接", (d, w) -> {
@@ -118,7 +118,7 @@ public class MainActivity extends Activity {
                     }
                     new AlertDialog.Builder(this)
                             .setTitle("退出")
-                            .setMessage("确定退出 115影库？")
+                            .setMessage("确定退出 Dash Spark Media？")
                             .setPositiveButton("退出", (d, w) -> finish())
                             .setNegativeButton("取消", null)
                             .show();

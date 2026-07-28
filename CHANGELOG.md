@@ -2,6 +2,15 @@
 
 本项目遵循语义化版本。每次功能变更对应一个 Git 提交与版本号。
 
+## v1.19.9 — 2026-07-28
+
+**跨设备续播 + 品牌改名 Dash Spark Media + 集数框间距根治**
+
+- **跨设备续播**：播放进度从各设备本地存储升级为服务端存储（新表 `watch_progress`，`GET /api/progress` 全量 / `POST /api/progress/{id}` 上报，`pos<=0` 清除）。web 端（localStorage 保留作离线兜底，取 max 合并）、TV ExoPlayer（SharedPreferences 同理，3 秒超时网络失败直接起播不阻塞）、TV 首页「继续观看」栏（本地+服务端按集取 max 合并）三端同步。电视上看到一半，web 打开同一集会问「是否从上次的位置开始」，反之亦然。curl 接口 roundtrip、gradlew 编译、adb 装机实测通过
+- **品牌改名**：115影库 → Dash Spark Media（Dash Spark 蓝色加粗 + Media 白色，去掉胶片图标）；观影端顶栏/登录框/管理端顶栏/Android 应用名与弹窗文案同步替换
+- **集数框间距根治**：上一版用 flex `gap` 设的 18px 间距在 TV WebView（Chrome 66）不生效导致方框粘连，改为 margin 实现（TV 18px / web 16px ≈ 两个数字宽），adb 截图确认 01–05 方框间距与浅蓝选中圈正常
+- 新增 ROADMAP-2.0.md：刮削源插件化、HLS 全转码、杜比直通、多用户档案等暂缓项统一归档到 2.0 规划
+
 ## v1.19.8 — 2026-07-28
 
 **集数数字方框样式微调**

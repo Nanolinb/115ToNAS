@@ -30,6 +30,9 @@ input, select { font-family: inherit; }
 }
 .logo { font-size: 18px; font-weight: 700; color: var(--accent2); white-space: nowrap; }
 .logo small { color: var(--muted); font-weight: 400; font-size: 11px; margin-left: 6px; }
+/* 品牌字标：Dash Spark 蓝色加粗，Media 白色 */
+.brand-spark { color: #4da3ff; font-weight: 800; }
+.brand-media { color: #fff; font-weight: 700; }
 .tabs { display: flex; gap: 4px; overflow-x: auto; }
 .tab {
   background: none; border: none; color: var(--muted);
@@ -139,10 +142,11 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .detail-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }
 /* 剧集列表与弹窗边界保持固定距离 */
 .ep-list { margin-top: 18px; padding-bottom: 8px; }
-/* 观影端集数数字方框 */
-.ep-pills { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 18px; padding-bottom: 8px; }
+/* 观影端集数数字方框（间距用 margin：TV WebView Chrome 66 不支持 flex gap） */
+.ep-pills { display: flex; flex-wrap: wrap; margin-top: 18px; padding-bottom: 8px; }
 .ep-pill {
   min-width: 32px; height: 25px; padding: 0 8px; border: none; border-radius: 5px;
+  margin: 0 16px 8px 0;
   background: rgba(255,255,255,.12); color: #c9cfd8; font-size: 13px; font-weight: 600;
   font-variant-numeric: tabular-nums; cursor: pointer;
 }

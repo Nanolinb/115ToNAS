@@ -49,6 +49,8 @@ VIEWER_PREFIXES = ("/api/poster/", "/api/stream/", "/api/subtitle/",
 _VIEWER_MEDIA_RE = re.compile(r"^/api/media/\d+$")
 _VIEWER_PLAYLINK_RE = re.compile(r"^/api/media/\d+/playlink$")
 _VIEWER_TRACKS_RE = re.compile(r"^/api/media/\d+/tracks$")
+# 观看进度：GET 全量 + POST 单条更新，观影端（含电视）都要写，不限 GET
+_VIEWER_PROGRESS_RE = re.compile(r"^/api/progress(?:/\d+)?$")
 
 
 @app.middleware("http")
@@ -56,12 +58,14 @@ async def auth_middleware(request: Request, call_next):
     path = request.url.path
     if not path.startswith("/api/") or path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
-    is_viewer = request.method == "GET" and (
-        path in VIEWER_GET_EXACT
-        or bool(_VIEWER_MEDIA_RE.match(path))
-        or bool(_VIEWER_PLAYLINK_RE.match(path))
-        or bool(_VIEWER_TRACKS_RE.match(path))
-        or any(path.startswith(p) for p in VIEWER_PREFIXES)
+    is_viewer = bool(_VIEWER_PROGRESS_RE.match(path)) or (
+        request.method == "GET" and (
+            path in VIEWER_GET_EXACT
+            or bool(_VIEWER_MEDIA_RE.match(path))
+            or bool(_VIEWER_PLAYLINK_RE.match(path))
+            or bool(_VIEWER_TRACKS_RE.match(path))
+            or any(path.startswith(p) for p in VIEWER_PREFIXES)
+        )
     )
     try:
         if is_viewer:
@@ -490,6 +494,36 @@ async def media_playlink(media_id: int):
     token = auth.make_play_token(media_id)
     return {"url": f"/api/stream/{media_id}?pt={token}",
             "expires_in": auth.PLAY_LINK_TTL}
+
+
+# ---------------- 观看进度（跨设备续播） ----------------
+# 服务端统一存一份，web/TV 各自再留本地副本做离线兜底，取两者较大值续播
+
+@app.get("/api/progress")
+async def get_progress():
+    """全量观看进度：{ "<media_id>": <秒>, ... }（数据量小，一次全取）。"""
+    rows = db.q("SELECT media_id, pos_sec FROM watch_progress")
+    return {str(r["media_id"]): r["pos_sec"] for r in rows}
+
+
+@app.post("/api/progress/{media_id}")
+async def set_progress(media_id: int, request: Request):
+    """更新单条进度；pos<=0 或缺省 = 播完/从头开始，删除该条。"""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    try:
+        pos = float(body.get("pos") or 0)
+    except (TypeError, ValueError):
+        pos = 0.0
+    if pos <= 0:
+        db.exe("DELETE FROM watch_progress WHERE media_id=?", (media_id,))
+    else:
+        db.exe("INSERT INTO watch_progress(media_id,pos_sec,updated_at) VALUES(?,?,?) "
+               "ON CONFLICT(media_id) DO UPDATE SET pos_sec=excluded.pos_sec,"
+               "updated_at=excluded.updated_at", (media_id, pos, db.now()))
+    return {"ok": True}
 
 
 @app.get("/api/media/{media_id}/tmdb_candidates")

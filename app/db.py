@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS downloads (
     size       INTEGER DEFAULT 0,
     done_at    INTEGER
 );
+CREATE TABLE IF NOT EXISTS watch_progress (
+    media_id   INTEGER PRIMARY KEY,  -- 影片 id
+    pos_sec    REAL NOT NULL,        -- 绝对播放位置（秒）
+    updated_at INTEGER NOT NULL
+);
 """
 
 

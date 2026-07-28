@@ -61,7 +61,8 @@ import java.util.regex.Pattern;
  * - 外挂字幕：服务端 srt→vtt 直挂，ass 走 ExoPlayer 自带 SSA 解析
  * - 音轨解码失败（无 DTS/TrueHD 授权）→ 自动回落服务端 ?audio=aac 转码流
  * - 遥控器左右键快退/快进 10 秒（控制器隐藏时）
- * - 续播：每 5 秒记录进度到 SharedPreferences，再打开时弹窗问「继续播放/从头开始」
+ * - 续播：每 5 秒记录进度到 SharedPreferences + 同步服务端（跨设备共享），
+ *   再打开时按两者较大值弹窗问「继续播放/从头开始」
  * - 选集切集：按影片 id 向服务端拉播放信息（带 WebView 同源 Cookie，观影密码下也能播）
  */
 @OptIn(markerClass = UnstableApi.class)
@@ -495,10 +496,32 @@ public class PlayerActivity extends Activity {
         setTitle(title == null ? "" : title);
     }
 
-    /** 起播入口：有续播存档先问，没有就从零开始 */
+    /** 起播入口：有效进度 = max(本地, 服务端)，有续播存档先问，没有就从零开始 */
     private void startPlayback() {
-        long saved = posKey == null ? 0
+        final long local = posKey == null ? 0
                 : getSharedPreferences(PREFS, MODE_PRIVATE).getLong(posKey, 0);
+        if (mediaId == null || apiBase == null || apiBase.isEmpty()) {
+            startPlaybackWith(local);
+            return;
+        }
+        // 后台线程拉服务端进度合并；网络失败/超时直接用本地值，不阻塞起播
+        new Thread(() -> {
+            long srv = 0;
+            try {
+                Object v = new JSONObject(httpGet(apiBase + "/api/progress", 3000))
+                        .opt(mediaId);
+                if (v instanceof Number) {
+                    srv = (long) (((Number) v).doubleValue() * 1000);
+                }
+            } catch (Exception ignore) {
+                // 拉不到就用本地进度
+            }
+            final long saved = Math.max(local, srv);
+            runOnUiThread(() -> startPlaybackWith(saved));
+        }).start();
+    }
+
+    private void startPlaybackWith(long saved) {
         if (saved > 30_000) {
             askResume(saved);
         } else {
@@ -516,6 +539,7 @@ public class PlayerActivity extends Activity {
                         getSharedPreferences(PREFS, MODE_PRIVATE)
                                 .edit().remove(posKey).apply();
                     }
+                    postProgress(0); // 服务端一起清（跨设备同步）
                     load(url, 0, 0);
                 })
                 .setCancelable(false)
@@ -529,7 +553,7 @@ public class PlayerActivity extends Activity {
                      : String.format("%d:%02d", m, ss);
     }
 
-    /** 30 秒以内不记；快播完（剩不到 60 秒）自动清档，下次从头播。 */
+    /** 30 秒以内不记；快播完（剩不到 60 秒）自动清档，下次从头播。本地 prefs 照存，同时同步服务端。 */
     private void savePos() {
         if (player == null || posKey == null) {
             return;
@@ -539,12 +563,27 @@ public class PlayerActivity extends Activity {
         SharedPreferences.Editor e = getSharedPreferences(PREFS, MODE_PRIVATE).edit();
         if (dur > 0 && dur - pos <= 60_000) {
             e.remove(posKey);
+            e.apply();
+            postProgress(0);
         } else if (pos > 30_000) {
             e.putLong(posKey, pos);
-        } else {
+            e.apply();
+            postProgress(pos / 1000);
+        }
+    }
+
+    /** 进度同步服务端（跨设备续播）；sec<=0 = 播完/从头开始，删除该条。后台线程，失败静默。 */
+    private void postProgress(final long sec) {
+        if (mediaId == null || apiBase == null || apiBase.isEmpty()) {
             return;
         }
-        e.apply();
+        new Thread(() -> {
+            try {
+                httpPost(apiBase + "/api/progress/" + mediaId, "{\"pos\":" + sec + "}");
+            } catch (Exception ignore) {
+                // 同步失败不影响本地续播
+            }
+        }).start();
     }
 
     /**
@@ -636,9 +675,14 @@ public class PlayerActivity extends Activity {
 
     /** 带 Cookie 的 GET（观影密码鉴权）；响应体按 UTF-8 文本返回 */
     private String httpGet(String u) throws Exception {
+        return httpGet(u, 8000);
+    }
+
+    /** 带 Cookie 与自定义超时的 GET */
+    private String httpGet(String u, int timeoutMs) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(u).openConnection();
-        c.setConnectTimeout(8000);
-        c.setReadTimeout(8000);
+        c.setConnectTimeout(timeoutMs);
+        c.setReadTimeout(timeoutMs);
         if (cookie != null && !cookie.isEmpty()) {
             c.setRequestProperty("Cookie", cookie);
         }
@@ -651,6 +695,23 @@ public class PlayerActivity extends Activity {
         }
         in.close();
         return new String(bos.toByteArray(), "UTF-8");
+    }
+
+    /** 带 Cookie 的 POST JSON（观影密码鉴权）；不读响应体，异常由调用方处理 */
+    private void httpPost(String u, String json) throws Exception {
+        HttpURLConnection c = (HttpURLConnection) new URL(u).openConnection();
+        c.setConnectTimeout(3000);
+        c.setReadTimeout(3000);
+        c.setRequestMethod("POST");
+        c.setDoOutput(true);
+        c.setRequestProperty("Content-Type", "application/json");
+        if (cookie != null && !cookie.isEmpty()) {
+            c.setRequestProperty("Cookie", cookie);
+        }
+        c.getOutputStream().write(json.getBytes("UTF-8"));
+        c.getOutputStream().close();
+        InputStream in = c.getInputStream(); // 触发请求并确认 2xx，否则抛异常
+        in.close();
     }
 
     @Override

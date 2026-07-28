@@ -139,10 +139,30 @@
     return (h ? h + ':' + String(m).padStart(2, '0') : m) + ':' + String(ss).padStart(2, '0');
   }
 
+  // 跨设备续播：服务端进度（秒→毫秒转 pos_<id>）与本地原生 map 按 key 取 max 合并
+  function mergeResume(local, srv) {
+    const out = {};
+    Object.keys(local).forEach((k) => { out[k] = local[k]; });
+    Object.keys(srv || {}).forEach((id) => {
+      const k = 'pos_' + id;
+      const ms = Math.floor((Number(srv[id]) || 0) * 1000);
+      if (ms > 0 && ms > (out[k] || 0)) out[k] = ms;
+    });
+    return out;
+  }
+
   function renderRail() {
     const list = $('.rail-list', home);
     if (!list) return;
-    const resume = resumeMap();
+    // 先拉服务端进度合并再渲染；失败退回本地 map（原行为）
+    fetch('/api/progress').then((r) => (r.ok ? r.json() : {})).then((m) => {
+      renderRailWith(mergeResume(resumeMap(), m));
+    }).catch(() => renderRailWith(resumeMap()));
+  }
+
+  function renderRailWith(resume) {
+    const list = $('.rail-list', home);
+    if (!list) return;
     const rows = [];
     Object.keys(resume).forEach((k) => {
       const id = +k.replace(/^pos_/, '');
