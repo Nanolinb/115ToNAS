@@ -201,12 +201,13 @@ body.tv-mode .rail-row.tv-focus {
   position: relative; /* #tvBrowse 绝对定位锚点 */
 }
 
-#tvTabs { display: flex; gap: 10px; margin: 2px 0 10px 4px; position: relative; z-index: 2; }
-/* 过滤器胶囊：复用页签样式；.on 表示该过滤器已选非「全部」值 */
+#tvTabs { display: flex; margin: 2px 0 10px 4px; position: relative; z-index: 2; }
+/* 过滤器胶囊：复用页签样式；.on 表示该过滤器已选非「全部」值。
+   胶囊间隔一个字符宽（margin：Chrome 66 不支持 flex gap） */
 .tv-tab {
   padding: 7px 20px; border-radius: 999px; font-size: 13px; cursor: pointer;
   background: rgba(255,255,255,.10); color: rgba(255,255,255,.78);
-  border: 2px solid transparent;
+  border: 2px solid transparent; margin-right: 13px;
 }
 .tv-tab.on { background: rgba(255,255,255,.92); color: #111; font-weight: 600; }
 body.tv-mode .tv-tab.tv-focus { box-shadow: none; border-color: #fff; }
