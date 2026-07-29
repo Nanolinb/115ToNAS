@@ -89,7 +89,8 @@
       '    <span class="tv-tab tv-filter" data-flt="genre"></span>' +
       '    <span class="tv-tab tv-filter" data-flt="year"></span>' +
       '  </nav>' +
-      '  <div id="tvFltPop"></div>' +
+      '  <div id="tvFltPopWrap"><div id="tvFltPop"></div>' +
+      '    <div class="fp-arrow up"></div><div class="fp-arrow down"></div></div>' +
       '  <div id="tvHeroCard">' +
       '    <div class="hc-bg"><div class="l"></div><div class="l"></div><div class="hc-fade"></div></div>' +
       '    <div class="hc-body">' +
@@ -116,6 +117,14 @@
     });
     renderRail();
     renderShelf(() => renderHero(shelfItems()[0] || null));
+    // 向左滚出内容后打开左边缘渐隐（回滚到顶即关闭）；滚到最右端去掉右缘渐隐，
+    // 让最后一张卡的选中白框完整清晰（对称第一张卡左缘）
+    const shelfEl = $('#tvShelf', home);
+    shelfEl.addEventListener('scroll', () => {
+      const mx = shelfEl.scrollWidth - shelfEl.clientWidth;
+      shelfEl.classList.toggle('scrolled', shelfEl.scrollLeft > 4);
+      shelfEl.classList.toggle('at-end', shelfEl.scrollLeft >= mx - 8);
+    });
   }
 
   /* ---------- 底部海报行：最新录入 8 条，近 7 天看过的隐藏 ---------- */
@@ -203,21 +212,31 @@
     if (fltPopOpen || !home) return;
     fltPopKind = kind;
     const pop = $('#tvFltPop', home);
+    const wrap = $('#tvFltPopWrap', home);
     const curVal = String(flt[kind]);
     pop.innerHTML = fltOptions(kind).map((o) =>
       '<div class="fp-opt' + (String(o[0]) === curVal ? ' on' : '') +
       '" data-val="' + esc(o[0]) + '">' + esc(o[1]) + '</div>'
     ).join('');
-    // 定位到对应胶囊正下方
+    // 定位到对应胶囊正下方（定位/显隐动画都作用在 wrap，箭头钉在滚动区外缘）
     const cap = $('.tv-filter[data-flt="' + kind + '"]', home);
     const sr = $('#tvStage', home).getBoundingClientRect();
     const cr = cap.getBoundingClientRect();
-    pop.style.left = Math.max(0, cr.left - sr.left) + 'px';
-    pop.style.top = (cr.bottom - sr.top + 6) + 'px';
+    wrap.style.left = Math.max(0, cr.left - sr.left) + 'px';
+    wrap.style.top = (cr.bottom - sr.top + 6) + 'px';
     fltPopOpen = true;
-    pop.classList.add('on');
-    void pop.offsetWidth;
-    pop.classList.add('in');
+    wrap.classList.add('on');
+    void wrap.offsetWidth;
+    wrap.classList.add('in');
+    // 上/下还有被隐藏的选项时，在对应边缘显示小三角指引
+    pop.scrollTop = 0;
+    const updateArrows = function () {
+      const mx = pop.scrollHeight - pop.clientHeight;
+      wrap.classList.toggle('more-up', pop.scrollTop > 2);
+      wrap.classList.toggle('more-down', pop.scrollTop < mx - 2);
+    };
+    pop.addEventListener('scroll', updateArrows);
+    updateArrows();
     $all('.fp-opt', pop).forEach((o) => o.addEventListener('click', () => applyFlt(o.dataset.val)));
     setFocus($('.fp-opt.on', pop) || $('.fp-opt', pop));
   }
@@ -225,9 +244,9 @@
   function closeFltPop() {
     if (!fltPopOpen) return;
     fltPopOpen = false;
-    const pop = $('#tvFltPop', home);
-    pop.classList.remove('in');
-    setTimeout(() => { if (!fltPopOpen) pop.classList.remove('on'); }, 240);
+    const wrap = $('#tvFltPopWrap', home);
+    wrap.classList.remove('in');
+    setTimeout(() => { if (!fltPopOpen) wrap.classList.remove('on'); }, 240);
     setFocus($('.tv-filter[data-flt="' + fltPopKind + '"]', home));
   }
 
@@ -337,7 +356,9 @@
     const shelf = $('#tvShelf', home);
     if (!shelf) return;
     loadRecentWatched(() => {
-      shelf.innerHTML = shelfItems().map(tcardHtml).join('');
+      // 末尾占位元素：Chrome 66 的 flex 滚动容器不把 padding-right 计入可滚动区，
+      // 末尾卡永远滚不出右缘渐隐区；实体占位 div 所有浏览器都计入 scrollWidth
+      shelf.innerHTML = shelfItems().map(tcardHtml).join('') + '<div class="st-tail"></div>';
       bindTcards(shelf);
       if (after) after();
     });
@@ -359,7 +380,7 @@
     b.innerHTML = [['movie', '电影'], ['show', '剧集']].map((r) =>
       '<div class="br-row"' + (flt.kind && flt.kind !== r[0] ? ' style="display:none"' : '') + '>' +
       '<div class="br-title">' + r[1] + '</div>' +
-      '<div class="br-strip">' + browseItems(r[0]).map(tcardHtml).join('') + '</div></div>'
+      '<div class="br-strip">' + browseItems(r[0]).map(tcardHtml).join('') + '<div class="st-tail"></div></div></div>'
     ).join('');
     bindTcards(b);
   }
@@ -402,11 +423,14 @@
   function closeBrowse() {
     if (!browseOpen || !home) return;
     browseOpen = false;
-    $('#tvStage', home).classList.remove('browse-open');
-    // 反向播放进场动画（下滑+淡出），动画结束后再 display:none
+    // 反向播放进场动画（下滑+淡出）；动画结束后才 display:none，
+    // 并且等双排完全隐藏后才去掉 browse-open（「最近更新」/Hero 文字此时才回显）
+    const stage = $('#tvStage', home);
     const b = $('#tvBrowse', home);
     b.classList.remove('in');
-    setTimeout(() => { if (!browseOpen) b.classList.remove('on'); }, 360);
+    setTimeout(() => {
+      if (!browseOpen) { b.classList.remove('on'); stage.classList.remove('browse-open'); }
+    }, 360);
     const shelf = $('#tvShelf', home);
     let target = lastShelfKey && shelf ? $('.tcard[data-key="' + lastShelfKey + '"]', shelf) : null;
     if (!target && shelf) target = $('.tcard', shelf);
@@ -468,7 +492,8 @@
     if (!shelf) return;
     const sr = shelf.getBoundingClientRect();
     const r = el.getBoundingClientRect();
-    const margin = 40; // 边缘留白：聚焦放大后不贴边，也给下一张露出半截作提示
+    const margin = 120; // 边缘留白（≈一张卡宽）：焦点卡始终离边一张卡的距离，
+    // 每步平移幅度更大，末尾卡也能完整滚出渐隐/边缘区
     let target = shelf.scrollLeft;
     if (r.left < sr.left + margin) target -= (sr.left + margin) - r.left;
     else if (r.right > sr.right - margin) target += r.right - (sr.right - margin);
@@ -487,12 +512,28 @@
     step();
   }
 
+  // 浮层选项纵向滚动：手动算 scrollTop，上下各留 10px 边距，
+  // 避免 Chrome 66 的 scrollIntoView 把焦点项贴到边缘导致白框被裁
+  function scrollPopTo(el) {
+    const pop = el.closest('#tvFltPop');
+    if (!pop) return;
+    const pr = pop.getBoundingClientRect(), r = el.getBoundingClientRect();
+    const margin = 10;
+    let t = pop.scrollTop;
+    if (r.top < pr.top + margin) t -= (pr.top + margin) - r.top;
+    else if (r.bottom > pr.bottom - margin) t += r.bottom - (pr.bottom - margin);
+    const mx = pop.scrollHeight - pop.clientHeight;
+    pop.scrollTop = Math.max(0, Math.min(mx, t));
+  }
+
   function setFocus(el) {
     $all('.tv-focus').forEach((x) => x.classList.remove('tv-focus'));
     if (!el) return;
     el.classList.add('tv-focus');
     if (el.classList.contains('tcard')) {
       scrollShelfTo(el);
+    } else if (el.classList.contains('fp-opt')) {
+      scrollPopTo(el);
     } else {
       try { el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) { el.scrollIntoView(false); }
     }
@@ -580,6 +621,7 @@
     if (isVis(player) && typeof closePlayer === 'function') { closePlayer(); return true; }
     const masks = $all('.modal-mask').filter(isVis);
     if (masks.length) { masks[masks.length - 1].classList.add('hidden'); return true; }
+    // 双排浏览层 →「最近更新」：方向键上/下或返回键都可驱动切换
     if (browseOpen) { closeBrowse(); return true; }
     return false;
   };

@@ -84,6 +84,10 @@ async def security_headers(request: Request, call_next):
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    # /static 不带 Cache-Control 时 WebView 会做启发式缓存（Last-Modified 的 10%），
+    # 电视端曾因此一直放旧版 JS/CSS；no-cache = 每次校验（ETag 命中走 304，开销极小）
+    if request.url.path.startswith("/static/"):
+        resp.headers.setdefault("Cache-Control", "no-cache")
     return resp
 
 

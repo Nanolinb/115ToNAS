@@ -49,6 +49,9 @@ public class MainActivity extends Activity {
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setTextZoom(100);
+        // 禁用 WebView 磁盘缓存：服务端已是局域网毫秒级，缓存只会让电视端
+        // 停留在旧版 JS/CSS（启发式缓存按 Last-Modified 10% 算新鲜期）
+        s.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
         web.addJavascriptInterface(new NativeBridge(), "MediaHubNative");
         web.setWebViewClient(new WebViewClient() {
