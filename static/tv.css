@@ -12,6 +12,11 @@ body.tv-mode { background: #000; overflow-x: hidden; }
 
 /* ---------- 氛围背景：聚焦影片的封面高斯模糊铺满全屏 ---------- */
 #tvAmbient { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 0; }
+/* 双排浏览层打开时整体淡出（tvnav.js 切 .off）：否则菜单顶部的品牌栏/胶囊
+   横条露出模糊版海报，与菜单内透出的清晰 Hero 上下相邻，同一画面两个形态
+   叠出重影；隐藏后该横条为纯深色，清晰 Hero 原样保留 */
+#tvAmbient { transition: opacity .6s ease; }
+#tvAmbient.off { opacity: 0; }
 #tvAmbient .amb {
   position: absolute; top: -6%; right: -6%; bottom: -6%; left: -6%;
   background-size: cover; background-position: center 20%;
@@ -37,6 +42,9 @@ body.tv-mode .topbar {
   height: 44px;
 }
 body.tv-mode .topbar .tab { color: rgba(255,255,255,.55); }
+/* 观影页顶栏唯一的链接是「管理」入口，TV 上它是纯摆设（遥控器焦点不收录），直接隐藏；
+   注意必须用 a.tab 限定，admin 端自己的页签也是 .tab 不能误伤 */
+body.tv-mode .topbar a.tab { display: none; }
 
 /* ---------- 筛选工具栏：玻璃胶囊，不聚焦时压低存在感 ---------- */
 body.tv-mode .toolbar { gap: 12px; }

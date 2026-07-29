@@ -359,12 +359,14 @@
     setFocus(first);
   }
 
-  function closeRail() {
+  function closeRail(target) {
     if (!railOpen) return;
     railOpen = false;
     home.classList.remove('rail-open');
-    const t = railReturnFocus && isVis(railReturnFocus) && document.contains(railReturnFocus)
-      ? railReturnFocus : $('.tcard', home);
+    const t = (target && isVis(target) && document.contains(target))
+      ? target
+      : (railReturnFocus && isVis(railReturnFocus) && document.contains(railReturnFocus))
+        ? railReturnFocus : $('.tcard', home);
     railReturnFocus = null;
     if (t) setFocus(t);
   }
@@ -434,6 +436,9 @@
     buildBrowseRows();
     const b = $('#tvBrowse', home);
     $('#tvStage', home).classList.add('browse-open');
+    // 淡出全屏模糊氛围背景：菜单内透出清晰 Hero，若顶部横条再露出同一海报的
+    // 模糊版，两个形态上下相邻成重影（见 tv.css #tvAmbient.off）
+    amb.classList.add('off');
     // 滑动渐显进场：先 display:block 占位，强制 reflow 后再加终态类触发 transition
     b.classList.add('on');
     void b.offsetWidth;
@@ -461,6 +466,8 @@
     const stage = $('#tvStage', home);
     const b = $('#tvBrowse', home);
     b.classList.remove('in');
+    // 氛围背景同步淡回（在菜单收层动画之下进行，与主页节奏一致）
+    amb.classList.remove('off');
     setTimeout(() => {
       if (!browseOpen) { b.classList.remove('on'); stage.classList.remove('browse-open'); }
     }, 360);
@@ -601,8 +608,28 @@
   }
 
   function move(dir) {
-    // 继续观看栏滑出状态：按「右」收拢（栏内只上下导航，确认播放）
-    if (dir === 'right' && home && railOpen) { closeRail(); return; }
+    // 继续观看栏滑出状态：按「右」收拢，焦点落到几何上最近的右侧元素
+    //（栏内只上下导航，确认播放）
+    if (dir === 'right' && home && railOpen) {
+      const cur = focused();
+      // currentItems() 在栏开时只含栏内行，这里要找的是栏右侧的主内容元素
+      const items = $all('.tv-tab, .hc-watch, .tcard', home).filter(isVis);
+      let best = null, bestScore = Infinity;
+      if (cur) {
+        const r = cur.getBoundingClientRect();
+        const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+        items.forEach((el) => {
+          if (el === cur) return;
+          const b = el.getBoundingClientRect();
+          const dx = b.left + b.width / 2 - cx, dy = b.top + b.height / 2 - cy;
+          if (dx <= 4) return;
+          const score = dx + Math.abs(dy) * 3; // 纵向差高权重，优先同行就近落点
+          if (score < bestScore) { bestScore = score; best = el; }
+        });
+      }
+      closeRail(best);
+      return;
+    }
     // 焦点在底部最新行的海报上按「下」→ 打开浏览层
     if (dir === 'down' && home && !browseOpen) {
       const cur = focused();
@@ -627,7 +654,7 @@
     if (!cur || items.indexOf(cur) < 0) { setFocus(items[0]); return; }
     const r = cur.getBoundingClientRect();
     const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-    let best = null, bestScore = Infinity;
+    let best = null, bestScore = Infinity, bestDy = 0;
     items.forEach((el) => {
       if (el === cur) return;
       const b = el.getBoundingClientRect();
@@ -641,9 +668,20 @@
       const primary = horiz ? Math.abs(dx) : Math.abs(dy);
       const secondary = horiz ? Math.abs(dy) : Math.abs(dx);
       const score = primary + secondary * 2.2;
-      if (score < bestScore) { bestScore = score; best = el; }
+      if (score < bestScore) { bestScore = score; best = el; bestDy = dy; }
     });
-    if (best) { setFocus(best); return; }
+    if (best) {
+      // 左右导航追求「同行最近」：最佳候选纵向差超过一行高时，按「左」不斜跳到
+      // 左上角（如最左海报卡→「类型」胶囊），而是直接滑出继续观看栏
+      if (dir === 'left' && home && !railOpen && !browseOpen && !fltPopOpen &&
+          !isVis($('#playerMask')) && !$all('.modal-mask').filter(isVis).length &&
+          Math.abs(bestDy) > 40) {
+        openRail();
+        return;
+      }
+      setFocus(best);
+      return;
+    }
     // 按「左」已无可选目标（焦点在最左）→ 滑出继续观看栏
     // （只在主界面层级生效：播放器/弹窗/过滤浮层/浏览层开着时不触发）
     if (dir === 'left' && home && !railOpen && !browseOpen && !fltPopOpen &&
