@@ -20,10 +20,13 @@ body.tv-mode { background: #000; overflow-x: hidden; }
   filter: blur(46px) brightness(.42) saturate(1.25);
 }
 #tvAmbient .amb.on { opacity: 1; }
-/* 底部压暗，保证海报行可读 */
+/* 底部压暗，保证海报行可读。多段 stops 逼近平滑曲线——
+   单折点线性渐变会在折点处形成马赫带横线（亮色背景上尤其明显） */
 #tvAmbient::after {
   content: ''; position: absolute; top: 0; right: 0; bottom: 0; left: 0;
-  background: linear-gradient(rgba(0,0,0,.25), rgba(0,0,0,.78) 78%, rgba(0,0,0,.9));
+  background: linear-gradient(
+    rgba(0,0,0,.22) 0%, rgba(0,0,0,.34) 40%, rgba(0,0,0,.5) 58%,
+    rgba(0,0,0,.66) 72%, rgba(0,0,0,.8) 84%, rgba(0,0,0,.9) 100%);
 }
 
 body.tv-mode .topbar, body.tv-mode main { position: relative; z-index: 1; }
@@ -88,8 +91,10 @@ body.tv-mode .btn.tv-focus {
 /* ---------- 详情弹窗：接近全屏的影片页 ---------- */
 body.tv-mode .modal-mask { background: rgba(0,0,0,.55); backdrop-filter: none; }
 body.tv-mode .modal {
-  /* 详情弹窗最多占屏宽 3/5，两侧留出空间、剧集列表纵向滚动 */
-  max-width: 60vw; max-height: 92vh; border-radius: 20px;
+  /* 详情弹窗最多占屏宽 3/5，两侧留出空间、剧集列表纵向滚动；
+     高度上限 84vh（曾 92vh：剧集弹窗内容高时上下边距只剩 ~40px，
+     电视 overscan 一吃就看不到弹窗顶边，电影弹窗矮所以没事） */
+  max-width: 60vw; max-height: 84vh; border-radius: 20px;
   background: #101318; border: none; overflow-y: auto;
   box-shadow: 0 30px 80px rgba(0,0,0,.8);
 }
@@ -100,19 +105,36 @@ body.tv-mode .modal .mclose {
   background: rgba(0,0,0,.5); color: #fff; font-size: 17px;
 }
 
-body.tv-mode .detail-hero { height: 300px; border-radius: 0; }
+/* 背景图整幅垫底：绝对定位撑满弹窗、不再占文档流高度，封面/简介/集数直接压在图上。
+   原先 hero 是文档流内 300px 高块，弹窗内容超高可滚动时，自动聚焦第一集的
+   scrollIntoView 会把内容滚到底、顶部背景图被推出可视区（看着像「弹窗顶部溢出」）。
+   垫底后内容一屏放得下，不再滚动；弹窗 position:relative 也让关闭 X 锚回弹窗右上角 */
+body.tv-mode .modal { position: relative; }
+body.tv-mode .detail-hero {
+  position: absolute; top: 0; right: 0; bottom: 0; left: 0; height: auto;
+  border-radius: 0; z-index: 0;
+}
 body.tv-mode .detail-hero img { opacity: .85; }
 body.tv-mode .detail-hero .fade {
-  background: linear-gradient(rgba(16,19,24,0) 30%, #101318 96%);
+  /* 顶部留一点图、往下快速压暗，保证压在上面的文字/集数可读 */
+  background: linear-gradient(rgba(16,19,24,.25) 0%, rgba(16,19,24,.86) 72%, #101318 100%);
 }
-body.tv-mode .detail-flex { margin-top: -84px; padding: 0 28px 22px; }
+body.tv-mode .detail-flex, body.tv-mode .ep-pills, body.tv-mode .ep-list {
+  position: relative; z-index: 1;
+}
+body.tv-mode .detail-flex { margin-top: 64px; padding: 0 28px 22px; }
 body.tv-mode .detail-flex .dposter {
   width: 148px; border-radius: 14px; border: none;
   box-shadow: 0 14px 36px rgba(0,0,0,.65);
 }
 body.tv-mode .detail-meta h2 { font-size: 30px; font-weight: 700; }
 body.tv-mode .detail-meta .tags { color: rgba(255,255,255,.6); font-size: 14px; }
-body.tv-mode .detail-meta .overview { color: rgba(255,255,255,.78); font-size: 14px; }
+body.tv-mode .detail-meta .overview {
+  color: rgba(255,255,255,.78); font-size: 14px;
+  /* 长简介钳到 7 行：弹窗内容必须一屏放得下——一旦可滚动，自动聚焦第一集的
+     scrollIntoView 会把内容（含锚在弹窗上的关闭 X）往上推，顶部看着就像溢出 */
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 7; -webkit-box-orient: vertical;
+}
 
 /* 按钮：Apple TV 玻璃胶囊，主按钮白底黑字 */
 body.tv-mode .detail-actions .btn, body.tv-mode .ep-row .btn {
@@ -169,8 +191,38 @@ body.tv-mode #page-library { display: none; }
   transform: translateY(-8px);
 }
 
-/* ---------- 左栏：继续观看 / 最新录入 ---------- */
-#tvRail { width: 216px; flex-shrink: 0; padding: 2px 0 12px 20px; overflow-y: auto; }
+/* ---------- 左栏：继续观看 / 最新录入 ----------
+   默认收拢：整栏平移出屏，舞台 margin-left 收窄（内容铺开更宽、更居中）；
+   .rail-open 时滑出、舞台右移回紧凑布局。两态 transition 同步（时长一致） */
+#tvRail {
+  position: absolute; left: 0; top: 0; bottom: 0; z-index: 6;
+  width: 216px; padding: 2px 0 12px 20px; overflow-y: auto;
+  background: linear-gradient(90deg, rgba(9,11,15,.97) 0%, rgba(9,11,15,.93) 82%, rgba(9,11,15,.78) 100%);
+  /* 收拢位移要多走 20px：#tvHome 相对屏幕左缘有 body 内边距 20px 的偏移，
+     只移 -100% 右缘 20px 仍露在屏上（一条带省略号残片的深色硬边） */
+  transform: translateX(calc(-100% - 20px));
+  transition: transform .28s ease;
+}
+#tvHome.rail-open #tvRail { transform: none; }
+
+/* 收拢状态的最左缘指示条：竖排「最近观看」，提示按「左」可滑出左栏。
+   不垫任何半透明底色（半透明黑层会把背景纹理压成一块平板、接缝露馅），
+   文字靠阴影保证在各种背景上可读 */
+#tvRailTab {
+  position: absolute; left: 0; top: 0; bottom: 0; width: 44px; z-index: 2;
+  display: flex; align-items: center; justify-content: flex-start;
+  cursor: pointer;
+  transition: opacity .22s ease;
+}
+#tvRailTab span {
+  /* 逐字 <br> 竖排（Chrome 66 的 flex+vertical-rl 量宽有 bug，盒宽算成横排文本长），
+     行高当字距；指示条左缘已在 #tvHome 最左（=顶栏品牌字的 20px），文字不再额外缩进 */
+  font-size: 13px; line-height: 1.7; text-align: left;
+  color: rgba(255,255,255,.62);
+  text-shadow: 0 1px 8px rgba(0,0,0,.95), 0 0 3px rgba(0,0,0,.9);
+  margin-left: 0;
+}
+#tvHome.rail-open #tvRailTab { opacity: 0; }
 #tvRail .rail-title {
   font-size: 15px; color: rgba(255,255,255,.68); margin: 8px 0 10px 4px;
   letter-spacing: 1px;
@@ -195,11 +247,16 @@ body.tv-mode .rail-row.tv-focus {
   box-shadow: none; background: rgba(255,255,255,.16); border-color: rgba(255,255,255,.85);
 }
 
-/* ---------- 中部舞台 ---------- */
+/* ---------- 中部舞台 ----------
+   margin-left 随左栏开/收过渡：收拢时只让开指示条（34px），内容铺开；
+   滑出时右移到 216px，回到紧凑布局（与左栏 transition 同速） */
 #tvStage {
   flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 0 22px 0 12px;
   position: relative; /* #tvBrowse 绝对定位锚点 */
+  margin-left: 34px;
+  transition: margin-left .28s ease;
 }
+#tvHome.rail-open #tvStage { margin-left: 216px; }
 
 #tvTabs { display: flex; margin: 2px 0 10px 4px; position: relative; z-index: 2; }
 /* 过滤器胶囊：复用页签样式；.on 表示该过滤器已选非「全部」值。
@@ -255,13 +312,23 @@ body.tv-mode #tvFltPop .fp-opt.tv-focus {
 
 /* Hero 卡：清晰封面大图 + 左下文字。
    卡片本体在文档流中位置尺寸不变；背景层（.hc-bg）向下延伸出卡片底边 50%
-   并渐隐，当作舞台背景——overflow:visible + 卡片自身 z-index 低于 tabs/shelf */
+   并渐隐，当作舞台背景——overflow:visible + 卡片自身 z-index 低于 tabs/shelf。
+   卡片底色必须透明：.hc-bg 的 mask 渐隐从卡片内就开始了，若卡片垫实色，
+   渐隐在卡片内露出卡片底色、在卡片下露出氛围背景，两种底交界成一条横线 */
 #tvHeroCard {
   position: relative; flex: 1; min-height: 0; border-radius: 18px; overflow: visible;
-  background: #0b0e13; z-index: 1;
+  background: transparent; z-index: 1;
 }
-/* 背景层：顶到卡片顶部，高度 150%（下半截延伸出卡片，靠 .hc-fade 渐隐收尾） */
-.hc-bg { position: absolute; top: 0; right: 0; left: 0; height: 150%; }
+/* 背景层：顶到卡片顶部，高度 150%（下半截延伸出卡片）。
+   延伸区的收尾用 -webkit-mask-image 让图片自身渐隐到透明（alpha 乘法，
+   不盖半透明黑层——黑层会让下半部分死黑、和底层背景接缝露馅）。
+   多段 stops 逼近平滑曲线：单折点的线性渐变会在折点处形成马赫带亮线 */
+.hc-bg {
+  position: absolute; top: 0; right: 0; left: 0; height: 150%;
+  -webkit-mask-image: linear-gradient(180deg,
+    #000 0%, #000 45%, rgba(0,0,0,.78) 60%, rgba(0,0,0,.5) 73%,
+    rgba(0,0,0,.24) 85%, transparent 97%);
+}
 .hc-bg .l {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0;
   /* 圆角只保留在卡片本体的顶边两角，延伸部分自然渐隐 */
@@ -273,10 +340,9 @@ body.tv-mode #tvFltPop .fp-opt.tv-focus {
 .hc-bg .hc-fade {
   position: absolute; top: 0; right: 0; bottom: 0; left: 0;
   border-radius: 18px 18px 0 0;
+  /* 只保留水平方向的文字对比度压暗；纵向不再盖黑（渐隐交给 mask） */
   background:
-    linear-gradient(90deg, rgba(9,11,15,.92) 0%, rgba(9,11,15,.55) 42%, rgba(9,11,15,.04) 72%),
-    /* 纵向：卡片底边（150% 盒的 2/3 处）已足够暗，延伸区继续压暗后最后 5% 淡出到透明 */
-    linear-gradient(rgba(9,11,15,0) 34%, rgba(9,11,15,.8) 64%, rgba(9,11,15,.97) 95%, rgba(9,11,15,0) 100%);
+    linear-gradient(90deg, rgba(9,11,15,.92) 0%, rgba(9,11,15,.55) 42%, rgba(9,11,15,.04) 72%);
 }
 /* 浏览层打开：隐藏 Hero 文字与播放钮，背景大图保留并透出到浏览层 */
 #tvStage.browse-open .hc-body { display: none; }
@@ -376,8 +442,10 @@ body.tv-mode .hc-watch.tv-focus { box-shadow: 0 0 0 3px var(--accent2); backgrou
 .tcard .tp-wrap {
   /* Chrome 66 不支持 aspect-ratio：固定高度，object-fit 裁齐海报 */
   position: relative; height: 160px; border-radius: 12px; overflow: hidden;
-  background: var(--card); border: 2px solid transparent;
-  box-shadow: 0 6px 18px rgba(0,0,0,.4);
+  background: var(--card);
+  /* 未选中卡只要一圈细细的暗色描边（2px），不再叠 18px 的大范围阴影 */
+  border: 2px solid rgba(0,0,0,.5);
+  box-shadow: 0 3px 10px rgba(0,0,0,.3);
 }
 .tcard .tp-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .tcard .tbadge {

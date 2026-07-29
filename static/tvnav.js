@@ -83,6 +83,7 @@
     home.id = 'tvHome';
     home.innerHTML =
       '<aside id="tvRail"><div class="rail-title">继续观看</div><div class="rail-list"></div></aside>' +
+      '<div id="tvRailTab"><span>最<br>近<br>观<br>看</span></div>' +
       '<section id="tvStage">' +
       '  <nav id="tvTabs">' +
       '    <span class="tv-tab tv-filter" data-flt="kind"></span>' +
@@ -109,6 +110,7 @@
     page.parentNode.insertBefore(home, page);
 
     $all('.tv-filter', home).forEach((c) => c.addEventListener('click', () => openFltPop(c.dataset.flt)));
+    $('#tvRailTab', home).addEventListener('click', openRail);
     updateCapsules();
     $('.hc-watch', home).addEventListener('click', () => {
       const e = libItem(featuredKey);
@@ -127,9 +129,11 @@
     });
   }
 
-  /* ---------- 底部海报行：最新录入 8 条，近 7 天看过的隐藏 ---------- */
+  /* ---------- 底部海报行：最新录入 8 条，近 7 天看完的隐藏 ---------- */
 
-  // 近 7 天有观看记录（updated_at）的 media id 集合；null=未加载，拉取失败退回 {}（不过滤）
+  // 近 7 天「看完」（pos=0 记录，updated_at 在 7 天内）的 media id 集合；
+  // 只看到一半的（pos>0）不隐藏——规则是「看完的不展示」，不是「播放过的不展示」。
+  // null=未加载，拉取失败退回 {}（不过滤）
   let recentWatched = null;
   function loadRecentWatched(cb) {
     if (recentWatched) { cb(); return; }
@@ -139,7 +143,7 @@
       if (m) {
         Object.keys(m).forEach((id) => {
           const v = m[id];
-          if (v && Number(v.ts) >= cutoff) set[id] = true;
+          if (v && Number(v.pos) <= 0 && Number(v.ts) >= cutoff) set[id] = true;
         });
       }
       recentWatched = set;
@@ -163,7 +167,7 @@
     return true;
   }
 
-  // 录入时间倒序取最新 8 条（剔除近一周看过的），再套 类型/题材/年份 过滤
+  // 录入时间倒序取最新 8 条（剔除近一周看完的），再套 类型/题材/年份 过滤
   function shelfItems() {
     const items = lib().filter((e) => !isRecentWatched(e));
     items.sort((a, b) => (b.added || 0) - (a.added || 0));
@@ -336,6 +340,35 @@
     }));
   }
 
+  /* ---------- 左栏滑出/收拢 ----------
+     默认隐藏：rail 整体平移出屏，只在最左缘留竖排「最近观看」指示条，
+     舞台 margin-left 收窄（内容铺开更宽、视觉上更居中）；
+     焦点在最左再按「左」滑出左栏，舞台同步右移回紧凑布局；
+     栏开时按「右」/返回键收拢。两态都用 .rail-open class + CSS transition 驱动 */
+  let railOpen = false;
+  let railReturnFocus = null;
+  let lastHomeFocus = null; // 最后一次主页内焦点（关弹窗时回退用）
+
+  function openRail() {
+    if (railOpen || !home) return;
+    const first = $('.rail-row', home);
+    if (!first) return;
+    railOpen = true;
+    railReturnFocus = focused();
+    home.classList.add('rail-open');
+    setFocus(first);
+  }
+
+  function closeRail() {
+    if (!railOpen) return;
+    railOpen = false;
+    home.classList.remove('rail-open');
+    const t = railReturnFocus && isVis(railReturnFocus) && document.contains(railReturnFocus)
+      ? railReturnFocus : $('.tcard', home);
+    railReturnFocus = null;
+    if (t) setFocus(t);
+  }
+
   /* ---------- 海报卡：底部最新行与浏览层共用 ---------- */
 
   function tcardHtml(e) {
@@ -474,9 +507,13 @@
     if (home) {
       // 过滤器浮层打开时只导航浮层选项
       if (fltPopOpen) return $all('.fp-opt', $('#tvFltPop', home)).filter(isVis);
+      // 继续观看栏滑出时只导航栏内行（按右/返回收拢，见 move/tvBack）
+      if (railOpen) return $all('.rail-row', home).filter(isVis);
       // 浏览层打开时只导航两排卡片（tabs/播放钮此时不可见，不参与焦点）
       if (browseOpen) return $all('.tcard', $('#tvBrowse', home)).filter(isVis);
-      return $all('.rail-row, .tv-tab, .hc-watch, .tcard', home).filter(isVis);
+      // rail 收拢时其行已平移出屏（getBoundingClientRect 仍有尺寸，isVis 挡不住），
+      // 必须直接从候选里排除，否则按左会把焦点丢进看不见的栏里
+      return $all('.tv-tab, .hc-watch, .tcard', home).filter(isVis);
     }
     return $all('#libGrid .card, .toolbar select, .toolbar input').filter(isVis);
   }
@@ -530,6 +567,9 @@
     $all('.tv-focus').forEach((x) => x.classList.remove('tv-focus'));
     if (!el) return;
     el.classList.add('tv-focus');
+    // 记录最后一次主页内的焦点：关闭详情弹窗（返回键）后要能回到原卡，
+    // 否则 MutationObserver 会把焦点重置到左上第一个元素
+    if (home && home.contains(el)) lastHomeFocus = el;
     if (el.classList.contains('tcard')) {
       scrollShelfTo(el);
     } else if (el.classList.contains('fp-opt')) {
@@ -550,7 +590,19 @@
     return f && isVis(f) ? f : null;
   }
 
+  // 关闭弹窗后焦点回退到打开前的卡片；元素被重绘过则按 data-key 重找
+  function restoreHomeFocus() {
+    let t = lastHomeFocus;
+    if (!(t && document.contains(t) && isVis(t))) {
+      const key = t && t.dataset ? t.dataset.key : null;
+      t = key && home ? $('.tcard[data-key="' + key + '"]', home) : null;
+    }
+    if (t && isVis(t)) setFocus(t);
+  }
+
   function move(dir) {
+    // 继续观看栏滑出状态：按「右」收拢（栏内只上下导航，确认播放）
+    if (dir === 'right' && home && railOpen) { closeRail(); return; }
     // 焦点在底部最新行的海报上按「下」→ 打开浏览层
     if (dir === 'down' && home && !browseOpen) {
       const cur = focused();
@@ -591,7 +643,13 @@
       const score = primary + secondary * 2.2;
       if (score < bestScore) { bestScore = score; best = el; }
     });
-    if (best) setFocus(best);
+    if (best) { setFocus(best); return; }
+    // 按「左」已无可选目标（焦点在最左）→ 滑出继续观看栏
+    // （只在主界面层级生效：播放器/弹窗/过滤浮层/浏览层开着时不触发）
+    if (dir === 'left' && home && !railOpen && !browseOpen && !fltPopOpen &&
+        !isVis($('#playerMask')) && !$all('.modal-mask').filter(isVis).length) {
+      openRail();
+    }
   }
 
   document.addEventListener('keydown', (ev) => {
@@ -620,7 +678,13 @@
     const player = $('#playerMask');
     if (isVis(player) && typeof closePlayer === 'function') { closePlayer(); return true; }
     const masks = $all('.modal-mask').filter(isVis);
-    if (masks.length) { masks[masks.length - 1].classList.add('hidden'); return true; }
+    if (masks.length) {
+      masks[masks.length - 1].classList.add('hidden');
+      restoreHomeFocus();
+      return true;
+    }
+    // 继续观看栏滑出 → 收拢（与按「右」等效）
+    if (railOpen) { closeRail(); return true; }
     // 双排浏览层 →「最近更新」：方向键上/下或返回键都可驱动切换
     if (browseOpen) { closeBrowse(); return true; }
     return false;
