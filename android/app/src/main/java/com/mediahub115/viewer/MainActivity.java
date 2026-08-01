@@ -112,9 +112,10 @@ public class MainActivity extends Activity {
         s.setCacheMode(WebSettings.LOAD_NO_CACHE);
         // TV 视口锁定 1600 css 宽：4K 面板（如极米 R10）按 device-width 布局时
         // css 宽 3840，150px 卡片/13px 字体等比缩成一半，左栏竖排指示也小得看不见。
-        // 固定布局宽度后 WebView 整体缩放适配，720p/1080p/4K 观感一致
+        // 固定布局宽度后 WebView 整体缩放适配，720p/1080p/4K 观感一致。
+        // 注意不能开 LoadWithOverviewMode：海报行全量后内容超宽，overview
+        // 会把整页缩小适配，左栏/Hero 布局全乱（1.2.2 的教训）
         s.setUseWideViewPort(true);
-        s.setLoadWithOverviewMode(true);
 
         web.addJavascriptInterface(new NativeBridge(), "MediaHubNative");
         web.setWebChromeClient(new android.webkit.WebChromeClient() {

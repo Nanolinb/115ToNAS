@@ -49,6 +49,7 @@ VIEWER_PREFIXES = ("/api/poster/", "/api/stream/", "/api/subtitle/",
 _VIEWER_MEDIA_RE = re.compile(r"^/api/media/\d+$")
 _VIEWER_PLAYLINK_RE = re.compile(r"^/api/media/\d+/playlink$")
 _VIEWER_TRACKS_RE = re.compile(r"^/api/media/\d+/tracks$")
+_VIEWER_ESUB_RE = re.compile(r"^/api/esub/\d+/\d+$")
 # 观看进度：GET 全量 + POST 单条更新，观影端（含电视）都要写，不限 GET
 _VIEWER_PROGRESS_RE = re.compile(r"^/api/progress(?:/\d+)?$")
 
@@ -64,6 +65,7 @@ async def auth_middleware(request: Request, call_next):
             or bool(_VIEWER_MEDIA_RE.match(path))
             or bool(_VIEWER_PLAYLINK_RE.match(path))
             or bool(_VIEWER_TRACKS_RE.match(path))
+            or bool(_VIEWER_ESUB_RE.match(path))
             or any(path.startswith(p) for p in VIEWER_PREFIXES)
         )
     )
@@ -415,7 +417,10 @@ async def media_tracks(media_id: int):
         duration = float((data.get("format") or {}).get("duration") or 0)
     except (TypeError, ValueError):
         duration = 0
-    audio_codecs, audio_tracks, sub_n = [], [], 0
+    audio_codecs, audio_tracks, embedded_subs = [], [], []
+    sub_ord = 0
+    # 可转 vtt 的文本字幕编码；位图字幕（PGS/DVD）抽不了，跳过但占位编号
+    TEXT_SUB_CODECS = {"subrip", "ass", "ssa", "mov_text", "webvtt", "text", "srt"}
     for s in data.get("streams", []):
         if s.get("codec_type") == "audio":
             audio_codecs.append(s.get("codec_name") or "")
@@ -425,14 +430,41 @@ async def media_tracks(media_id: int):
                                  "title": tags.get("title") or "",
                                  "codec": s.get("codec_name") or ""})
         elif s.get("codec_type") == "subtitle":
-            sub_n += 1
+            codec = (s.get("codec_name") or "").lower()
+            if codec in TEXT_SUB_CODECS:
+                tags = s.get("tags") or {}
+                embedded_subs.append({"n": sub_ord,
+                                      "lang": (tags.get("language") or "").lower(),
+                                      "title": tags.get("title") or "",
+                                      "codec": codec})
+            sub_ord += 1
     pref = _preferred_audio(audio_tracks)
     return {"available": True, "audio": len(audio_codecs),
-            "subtitle": sub_n, "audio_codecs": audio_codecs,
+            "subtitle": sub_ord, "audio_codecs": audio_codecs,
             "audio_tracks": audio_tracks,
+            "embedded_subs": embedded_subs,
             "preferred_audio": pref,
             "duration": duration,
             "needs_transcode": _needs_transcode(path, audio_tracks, pref)}
+
+
+@app.get("/api/esub/{media_id}/{n}")
+async def embedded_sub(media_id: int, n: int, offset: float = 0):
+    """抽取第 n 条内嵌文本字幕轨（ffmpeg 转 vtt 喂网页 <track>；
+    浏览器自己读不了容器内字幕。位图字幕（PGS/DVD）不支持）。"""
+    row = db.one("SELECT path FROM media WHERE id=?", (media_id,))
+    if not row or not Path(row["path"]).exists():
+        raise HTTPException(404, "not found")
+    offset = min(max(-3600.0, offset or 0.0), 24 * 3600)
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-v", "error", "-i", row["path"],
+        "-map", f"0:s:{n}", "-f", "webvtt", "pipe:1",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    out, _ = await proc.communicate()
+    if proc.returncode != 0 or not out:
+        raise HTTPException(404, "字幕轨不存在或不是文本字幕")
+    return Response(_shift_vtt(out.decode("utf-8", "replace"), offset),
+                    media_type="text/vtt; charset=utf-8")
 
 
 # 浏览器能直解的音频编码。Chrome/Edge 连 MKV 容器里的 ac3 也能解；

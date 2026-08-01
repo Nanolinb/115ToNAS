@@ -127,6 +127,16 @@ async function playMedia(id) {
   let info = { available: false, audio: 0, audio_codecs: [], audio_tracks: [], preferred_audio: 0 };
   try { info = await api(`/api/media/${id}/tracks`); } catch (e) {}
 
+  // 内嵌文本字幕轨：浏览器读不了容器内字幕，服务端 ffmpeg 抽轨转 vtt
+  (info.embedded_subs || []).forEach((t) => {
+    const track = document.createElement('track');
+    track.kind = 'subtitles';
+    track.label = `内嵌 ${t.lang || '?'}${t.title ? ' ' + t.title : ''}`;
+    track.srclang = t.lang || 'und';
+    track.src = `/api/esub/${id}/${t.n}`;
+    video.appendChild(track);
+  });
+
   const badCodecs = (info.audio_codecs || []).filter((c) => !BROWSER_AUDIO_OK.has(c));
   const tracks = info.audio_tracks || [];
   const pref = info.preferred_audio || 0;

@@ -394,6 +394,15 @@ public class PlayerActivity extends Activity {
         return lp;
     }
 
+    /** 字幕轨语种过滤：国内使用只保留 英/简中/繁中/中英双语，其余语种不进菜单 */
+    private static boolean keepTextTrack(androidx.media3.common.Format f) {
+        String l = (f.language == null ? "" : f.language.toLowerCase(java.util.Locale.ROOT));
+        String label = f.label == null ? "" : f.label;
+        return l.startsWith("en") || l.startsWith("zh") || l.startsWith("cmn")
+                || l.startsWith("zho") || l.startsWith("chi")
+                || label.contains("中") || label.contains("双");
+    }
+
     /**
      * 轨道选择弹窗（音轨/字幕通用）：单选列表，点中即生效并关闭——
      * 遥控器没有鼠标，ExoPlayer 自带的 TrackSelectionDialog 选完还要
@@ -406,7 +415,8 @@ public class PlayerActivity extends Activity {
         Tracks current = player.getCurrentTracks();
         List<Tracks.Group> groups = new ArrayList<>();
         for (Tracks.Group g : current.getGroups()) {
-            if (g.getType() == type && g.length > 0) {
+            if (g.getType() == type && g.length > 0
+                    && (type != C.TRACK_TYPE_TEXT || keepTextTrack(g.getTrackFormat(0)))) {
                 groups.add(g);
             }
         }
@@ -682,7 +692,16 @@ public class PlayerActivity extends Activity {
         player.play();
     }
 
-    /** 手动字幕校准：±0.5s 步进，按影片记忆；重建外挂字幕轨即时生效 */
+    /** 手动字幕校准：±0.5s 步进，按影片记忆。
+     *  应用要重建播放管道（换字幕 URL 只能 setMediaItem，视频重新缓冲，
+     *  AAC 转码流服务端还要重启 ffmpeg），连续按时每次都卡。
+     *  防抖：只记值 + 弹提示，停手 1.2 秒后统一应用一次。 */
+    private final Runnable subOffApplier = () -> {
+        if (player != null && url != null) {
+            load(url, Math.max(0, player.getCurrentPosition()), baseSubOffSec);
+        }
+    };
+
     private void adjustSubOffset(float delta) {
         userSubOffset = Math.round((userSubOffset + delta) * 10) / 10f;
         if (mediaId != null) {
@@ -691,12 +710,11 @@ public class PlayerActivity extends Activity {
         }
         String dir = userSubOffset > 0 ? "提前" : (userSubOffset < 0 ? "延后" : "归零");
         Toast.makeText(this, "字幕" + dir + " "
-                + String.format(java.util.Locale.US, "%+.1f", userSubOffset) + "s",
+                + String.format(java.util.Locale.US, "%+.1f", userSubOffset) + "s（松手后生效）",
                 Toast.LENGTH_SHORT).show();
         pokeMenuBar();
-        if (player != null && url != null) {
-            load(url, Math.max(0, player.getCurrentPosition()), baseSubOffSec);
-        }
+        handler.removeCallbacks(subOffApplier);
+        handler.postDelayed(subOffApplier, 1200);
     }
 
     /** 按字幕文件名/标签推断 BCP-47 语言：简中 zh-Hans > 繁中 zh-Hant > 中文 zh */
