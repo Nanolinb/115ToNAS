@@ -145,6 +145,15 @@ public class MainActivity extends Activity {
         s.setCacheMode(WebSettings.LOAD_NO_CACHE);
 
         web.addJavascriptInterface(new NativeBridge(), "MediaHubNative");
+        web.setWebChromeClient(new android.webkit.WebChromeClient() {
+            @Override
+            public android.graphics.Bitmap getDefaultVideoPoster() {
+                // 老 WebView（极米 GMUI / Android 9）默认实现返回 null，
+                // 页面含无 poster 的 <video> 时其内部 getWidth() NPE 整 App 闪退
+                return android.graphics.Bitmap.createBitmap(
+                        1, 1, android.graphics.Bitmap.Config.ARGB_8888);
+            }
+        });
         web.setWebViewClient(new WebViewClient() {
             @Override
             public void onReceivedError(WebView view, WebResourceRequest request,

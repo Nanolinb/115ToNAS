@@ -148,3 +148,8 @@ def set_secret(key, value):
 
 def now():
     return int(time.time())
+
+
+# 模块加载即建表：cloud115 等在 import 时就实例化并读库，
+# 若等 main 的启动钩子再 init，全新数据库会在导入期崩溃（no such table）
+init()

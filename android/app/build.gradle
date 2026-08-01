@@ -10,8 +10,8 @@ android {
         applicationId 'com.mediahub115.viewer'
         minSdk 21
         targetSdk 34
-        versionCode 3
-        versionName '1.1.1-xgimi-debug'
+        versionCode 4
+        versionName '1.1.2-xgimi-debug'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
