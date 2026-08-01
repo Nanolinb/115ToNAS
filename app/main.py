@@ -659,11 +659,26 @@ _IMG_MAGIC = ((b"\xff\xd8", ".jpg"), (b"\x89PNG", ".png"),
               (b"GIF8", ".gif"), (b"RIFF", ".webp"))
 
 
+def _share_show_poster(row, fname):
+    """剧集换封面：同剧其它集共享。有 TMDB 匹配按 tmdb_id 共享；
+    TMDB 没匹配上（不可达/未刮到）时按「同目录+同季」共享（与片库分组同口径，
+    否则只改到一集，海报墙上的分组卡永远拿不到新封面）。"""
+    if row["type"] != "episode":
+        return
+    if row["tmdb_id"]:
+        db.exe("UPDATE media SET poster=? WHERE tmdb_id=?", (fname, row["tmdb_id"]))
+        return
+    prefix = str(Path(row["path"]).parent) + "/"
+    db.exe("""UPDATE media SET poster=? WHERE type='episode'
+              AND substr(path, 1, ?) = ? AND COALESCE(season,1)=COALESCE(?,1)""",
+           (fname, len(prefix), prefix, row["season"]))
+
+
 @app.post("/api/media/{media_id}/poster_upload")
 async def poster_upload(media_id: int, request: Request):
     """本地上传封面：请求体即图片字节（免 multipart 依赖），
     魔数校验格式，剧集同剧共享。"""
-    row = db.one("SELECT id, type, tmdb_id FROM media WHERE id=?", (media_id,))
+    row = db.one("SELECT id, type, tmdb_id, path, season FROM media WHERE id=?", (media_id,))
     if not row:
         raise HTTPException(404, "not found")
     data = await request.body()
@@ -677,16 +692,13 @@ async def poster_upload(media_id: int, request: Request):
     fname = f"up_{media_id}_{int(time.time())}{ext}"
     (POSTER_DIR / fname).write_bytes(data)
     db.exe("UPDATE media SET poster=? WHERE id=?", (fname, media_id))
-    # 剧集：同剧其它集共享同一封面
-    if row["type"] == "episode" and row["tmdb_id"]:
-        db.exe("UPDATE media SET poster=? WHERE tmdb_id=?",
-               (fname, row["tmdb_id"]))
+    _share_show_poster(row, fname)
     return {"ok": True, "poster": fname}
 
 
 @app.post("/api/media/{media_id}/poster")
 async def set_poster(media_id: int, request: Request):
-    row = db.one("SELECT id, type, tmdb_id FROM media WHERE id=?", (media_id,))
+    row = db.one("SELECT id, type, tmdb_id, path, season FROM media WHERE id=?", (media_id,))
     if not row:
         raise HTTPException(404, "not found")
     body = await request.json()
@@ -697,10 +709,7 @@ async def set_poster(media_id: int, request: Request):
     if not fname:
         raise HTTPException(502, "封面下载失败，换一张试试")
     db.exe("UPDATE media SET poster=? WHERE id=?", (fname, media_id))
-    # 剧集：同剧其它集共享同一封面
-    if row["type"] == "episode" and row["tmdb_id"]:
-        db.exe("UPDATE media SET poster=? WHERE tmdb_id=?",
-               (fname, row["tmdb_id"]))
+    _share_show_poster(row, fname)
     return {"ok": True, "poster": fname}
 
 
