@@ -128,11 +128,18 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 /* 关掉 UA 默认焦点框（老 TV WebView 画的是方形蓝框，和圆形按钮底不搭） */
 .mclose:focus { outline: none !important; }
 /* 详情弹窗只要一个悬浮 ×：不要整条 sticky 标题栏（灰条），标题本来为空 */
+#detailModal { position: relative; }
 #detailModal .mhead {
-  position: absolute; top: 8px; right: 12px; z-index: 3;
+  position: absolute; top: 10px; right: 14px; z-index: 3;
   padding: 0; border-bottom: none; background: transparent;
 }
 #detailModal .mhead h3 { display: none; }
+/* 悬浮 ×：圆形黑底，海报背景上也有辨识度（与 TV 端同一形态） */
+#detailModal .mclose {
+  width: 40px; height: 40px; border-radius: 50%;
+  background: rgba(0,0,0,.5); color: #fff; font-size: 17px;
+}
+#detailModal .mclose:hover { background: rgba(0,0,0,.75); }
 /* TV 字体缺 ✕ 字形：内联 SVG 关闭图标（currentColor 跟随按钮色） */
 .x-ic { width: 16px; height: 16px; display: block; margin: auto; }
 
