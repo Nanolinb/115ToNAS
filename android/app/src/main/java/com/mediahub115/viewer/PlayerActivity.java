@@ -246,7 +246,7 @@ public class PlayerActivity extends Activity {
 
             @Override
             public void onPlayerError(PlaybackException error) {
-                BootLog.log(PlayerActivity.this, "player error: " + error.errorCodeName
+                BootLog.log(PlayerActivity.this, "player error: " + error.getErrorCodeName()
                         + " / " + error.getMessage()
                         + (error.getCause() != null ? " / cause: " + error.getCause() : ""));
                 if (!aacFallback) {
