@@ -4,7 +4,7 @@
  * - 左栏「继续观看」：原生播放器 SharedPreferences 里的观看进度；一条都没有时填最新录入
  * - 中部 Hero：当前聚焦影片的大标题/简介/播放钮，背景是该片封面的清晰大图+全屏氛围模糊层，
  *   背景层向下延伸出卡片 50% 并渐隐，当作整个舞台的背景
- * - 底部海报行「最近更新」：最新录入的 8 条（近 7 天看过的隐藏）
+ * - 底部海报行「最近更新」：全部未看完条目按录入时间倒序（最新在最左）
  * - 顶部过滤器：类型/题材/年份三个胶囊，确认键弹纵向选项浮层，纯方向键+确认+返回操作
  *   （不依赖 WebView 原生 select；对最近更新与浏览层两排同时生效）
  * - 浏览层：焦点在底部海报行按「下」打开 #tvBrowse（电影/剧集两排全量列表，
@@ -129,21 +129,19 @@
     });
   }
 
-  /* ---------- 底部海报行：最新录入 8 条，近 7 天看完的隐藏 ---------- */
+  /* ---------- 底部海报行：全部未看完，录入时间倒序（最新在最左） ---------- */
 
-  // 近 7 天「看完」（pos=0 记录，updated_at 在 7 天内）的 media id 集合；
-  // 只看到一半的（pos>0）不隐藏——规则是「看完的不展示」，不是「播放过的不展示」。
+  // 「看完」（pos=0 记录）的 media id 集合；只看到一半的（pos>0）不隐藏。
   // null=未加载，拉取失败退回 {}（不过滤）
   let recentWatched = null;
   function loadRecentWatched(cb) {
     if (recentWatched) { cb(); return; }
     fetch('/api/progress?full=1').then((r) => (r.ok ? r.json() : null)).then((m) => {
       const set = {};
-      const cutoff = Math.floor(Date.now() / 1000) - 7 * 86400;
       if (m) {
         Object.keys(m).forEach((id) => {
           const v = m[id];
-          if (v && Number(v.pos) <= 0 && Number(v.ts) >= cutoff) set[id] = true;
+          if (v && Number(v.pos) <= 0) set[id] = true;
         });
       }
       recentWatched = set;
@@ -167,13 +165,20 @@
     return true;
   }
 
-  // 录入时间倒序取最新 8 条（剔除近一周看完的），再套 类型/题材/年份 过滤
+  // 录入时间倒序（最新在最左），剔除看完的，再套 类型/题材/年份 过滤
   function shelfItems() {
     const items = lib().filter((e) => !isRecentWatched(e));
     items.sort((a, b) => (b.added || 0) - (a.added || 0));
-    return items.slice(0, 8).filter((e) =>
+    return items.filter((e) =>
       (!flt.kind || e.kind === flt.kind) && passGenreYear(e));
   }
+
+  // 原生播放器返回后由 MainActivity.onResume 调用：进度变了，重拉看完标记并重渲两排
+  window.tvProgressChanged = function () {
+    recentWatched = null;
+    renderRail();
+    renderShelf(null);
+  };
 
   /* ---------- 顶部过滤器：类型/题材/年份胶囊 + 纵向选项浮层 ---------- */
 

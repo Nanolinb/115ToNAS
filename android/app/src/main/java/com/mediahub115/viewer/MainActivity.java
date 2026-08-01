@@ -110,6 +110,11 @@ public class MainActivity extends Activity {
         // 禁用 WebView 磁盘缓存：服务端已是局域网毫秒级，缓存只会让电视端
         // 停留在旧版 JS/CSS（启发式缓存按 Last-Modified 10% 算新鲜期）
         s.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        // TV 视口锁定 1600 css 宽：4K 面板（如极米 R10）按 device-width 布局时
+        // css 宽 3840，150px 卡片/13px 字体等比缩成一半，左栏竖排指示也小得看不见。
+        // 固定布局宽度后 WebView 整体缩放适配，720p/1080p/4K 观感一致
+        s.setUseWideViewPort(true);
+        s.setLoadWithOverviewMode(true);
 
         web.addJavascriptInterface(new NativeBridge(), "MediaHubNative");
         web.setWebChromeClient(new android.webkit.WebChromeClient() {
@@ -133,6 +138,10 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
+                // TV 布局宽度锁 1600（见 setUseWideViewPort 注释）
+                view.evaluateJavascript(
+                        "var m=document.querySelector('meta[name=viewport]');"
+                                + "if(m)m.setAttribute('content','width=1600');", null);
                 // 活到这 = 本次启动没崩，清掉面包屑
                 BootLog.clear(MainActivity.this);
             }
@@ -203,6 +212,16 @@ public class MainActivity extends Activity {
                 .setNegativeButton("取消", null)
                 .setCancelable(false)
                 .show();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 原生播放器返回：进度/看完标记可能变了，通知网页重渲「继续观看/最近更新」
+        if (web != null) {
+            web.evaluateJavascript(
+                    "window.tvProgressChanged && window.tvProgressChanged()", null);
+        }
     }
 
     @Override

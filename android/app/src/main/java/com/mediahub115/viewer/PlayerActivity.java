@@ -588,7 +588,10 @@ public class PlayerActivity extends Activity {
                         getSharedPreferences(PREFS, MODE_PRIVATE)
                                 .edit().remove(posKey).apply();
                     }
-                    postProgress(0); // 服务端一起清（跨设备同步）
+                    // 写 1 秒而非 0：pos=0 在服务端语义是「看完」，会让
+                    // TV 端「最近更新」把条目永久藏掉；1 秒既不触发续播
+                    // 提示（>30 秒才问）也不算看完
+                    postProgress(1);
                     load(url, 0, 0);
                 })
                 .setCancelable(false)
