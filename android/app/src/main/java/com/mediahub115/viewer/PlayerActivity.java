@@ -126,6 +126,10 @@ public class PlayerActivity extends Activity {
         // 原生控制器：播放/暂停/进度条都是 ExoPlayer 自带的那套
         view = new PlayerView(this);
         view.setUseController(true);
+        // 关掉自动显示：首播缓冲时控制器被自动亮出后，开播瞬间隐藏计时
+        // 不会被重新调度，进度条永远挂屏（极米首播不复位，续播路径因
+        // 先弹对话框而侥幸正常）。改为 onIsPlayingChanged 里手动管理
+        view.setControllerAutoShow(false);
         view.setControllerShowTimeoutMs(5000);
         view.setBackgroundColor(Color.BLACK);
         view.setShutterBackgroundColor(Color.BLACK);
@@ -232,6 +236,14 @@ public class PlayerActivity extends Activity {
         }
         view.setPlayer(player);
         player.addListener(new Player.Listener() {
+            @Override
+            public void onIsPlayingChanged(boolean isPlaying) {
+                // 开播亮一下控制条（5 秒超时自动隐藏），不会永远挂屏
+                if (isPlaying) {
+                    view.showController();
+                }
+            }
+
             @Override
             public void onPlayerError(PlaybackException error) {
                 BootLog.log(PlayerActivity.this, "player error: " + error.errorCodeName
