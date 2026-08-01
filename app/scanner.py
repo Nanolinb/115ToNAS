@@ -181,7 +181,37 @@ async def rematch(media_id: int, tmdb_id: int | None = None,
     else:
         meta = await tmdb_client.match(title or row["title"], year or row["year"], kind)
     if not meta:
-        return None
+        # TMDB 不通（未配 Key/网络不可达/无匹配）→ subhd/豆瓣降级：
+        # 年份/简介/题材能拉多少拉多少；tmdb_id 留空，网络恢复后可再刷。
+        # 用户输了关键词（如「海贼王 真人版」）顺便存为中文名，通常比文件名解析准
+        from . import overview as _ov
+        m = await _ov.fetch_meta(title or row["name_cn"] or row["title"],
+                                 year or row["year"])
+        if not m:
+            return None
+        sets, vals = [], []
+        if m.get("year"):
+            sets.append("year=?")
+            vals.append(m["year"])
+        if m.get("overview"):
+            sets.append("overview=?")
+            vals.append(m["overview"])
+        if m.get("genres"):
+            sets.append("genres=?")
+            vals.append(m["genres"])
+        if title and title != row["title"]:
+            sets.append("name_cn=?")
+            vals.append(title)
+        if not sets:
+            return None
+        db.exe(f"UPDATE media SET {','.join(sets)} WHERE id=?", vals + [media_id])
+        # 剧集：同目录+同季一起更新（与片库分组/封面共享同口径，否则只改到一集）
+        if row["type"] == "episode":
+            prefix = str(Path(row["path"]).parent) + "/"
+            db.exe(f"UPDATE media SET {','.join(sets)} WHERE type='episode'"
+                   " AND substr(path, 1, ?) = ? AND COALESCE(season,1)=COALESCE(?,1)",
+                   vals + [len(prefix), prefix, row["season"]])
+        return m
     if not meta.get("overview") or not meta.get("genres"):
         # TMDB 无简介/题材（华语片常见）→ subhd/豆瓣兜底
         from . import overview as _ov
