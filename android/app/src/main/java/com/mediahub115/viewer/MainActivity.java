@@ -2,43 +2,134 @@ package com.mediahub115.viewer;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.Build;
 import android.os.Bundle;
 import android.text.InputType;
+import android.util.Log;
 import android.view.KeyEvent;
-import android.webkit.JavascriptInterface;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceError;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+
+import java.io.File;
+import java.io.FileOutputStream;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 
 /**
  * Dash Spark Media · 观影端 TV 壳：
  * - WebView 加载 NAS 上的观影页（海报墙/搜索/过滤）
  * - 播放走内嵌 ExoPlayer（应用内全屏，电视/投影硬解，可选音轨/字幕，
  *   音轨解不了自动回落服务端 AAC 转码），不跳外部 App
+ *
+ * xgimi-debug 分支：极米 GMUI 白屏闪退排查
+ * - 面包屑日志：每步写文件，进程崩掉后最后一行就是死亡位置，下次启动先弹出来
+ * - onRenderProcessGone：WebView 渲染进程崩溃时重建而不是整 App 陪葬（API 26+）
+ * - 服务器弹窗加「兼容模式」开关：WebView 改软件渲染，绕开部分 ROM 的 GPU 崩溃
  */
 public class MainActivity extends Activity {
 
     private static final String PREFS = "mediahub";
     private static final String KEY_SERVER = "server";
+    private static final String KEY_SOFT_RENDER = "soft_render";
     private static final String DEFAULT_SERVER = "http://192.168.1.107:8115";
+    private static final String LOG_FILE = "boot_log.txt";
 
     private WebView web;
     private SharedPreferences sp;
 
+    // ---------- 面包屑日志（进程崩了文件还在） ----------
+
+    private void log(String msg) {
+        String line = new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
+                .format(new Date()) + "  " + msg + "\n";
+        try (FileOutputStream f = openFileOutput(LOG_FILE, MODE_APPEND)) {
+            f.write(line.getBytes());
+        } catch (Exception ignored) {
+        }
+        Log.i("MediaHub", msg);
+    }
+
+    private String readLog() {
+        File f = getFileStreamPath(LOG_FILE);
+        if (!f.exists()) {
+            return null;
+        }
+        try {
+            byte[] buf = new byte[(int) Math.min(f.length(), 8192)];
+            try (java.io.FileInputStream in = openFileInput(LOG_FILE)) {
+                int n = in.read(buf);
+                return n > 0 ? new String(buf, 0, n) : null;
+            }
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void deleteLog() {
+        getFileStreamPath(LOG_FILE).delete();
+    }
+
+    // ---------- 生命周期 ----------
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // Java 层未捕获异常：落盘后再死，下次启动能看到堆栈
+        Thread.setDefaultUncaughtExceptionHandler((t, e) -> {
+            log("CRASH[" + t.getName() + "] " + e + "\n" + Log.getStackTraceString(e));
+            android.os.Process.killProcess(android.os.Process.myPid());
+        });
         // App 在前台时常亮：挡住小米的广告屏保（用户反馈没播视频也很快进屏保广告）。
         // 退出 App 后交还系统，按系统设置的屏保超时走
         getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         sp = getSharedPreferences(PREFS, MODE_PRIVATE);
 
+        // 上次启动留下了日志 = 上次没活到页面加载完成（崩了）→ 先弹出来给人看
+        String lastLog = readLog();
+        if (lastLog != null) {
+            deleteLog();
+            showLastLogDialog(lastLog);
+        } else {
+            init();
+        }
+    }
+
+    private void init() {
+        log("init, sdk=" + Build.VERSION.SDK_INT + ", softRender=" + sp.getBoolean(KEY_SOFT_RENDER, false));
+        setupWebView();
+
+        String server = sp.getString(KEY_SERVER, "");
+        if (server.isEmpty()) {
+            showServerDialog(null);
+        } else {
+            log("loadUrl " + server);
+            web.loadUrl(server + "/");
+        }
+    }
+
+    private void setupWebView() {
+        if (web != null) {
+            web.destroy();
+        }
         web = new WebView(this);
+        log("webview created");
+        // 兼容模式：软件渲染。极米等定制 ROM 的 WebView GPU 合成崩溃时勾上有效；
+        // 只影响海报墙界面流畅度，视频播放是独立 ExoPlayer 硬解，不受影响
+        if (sp.getBoolean(KEY_SOFT_RENDER, false)) {
+            web.setLayerType(WebView.LAYER_TYPE_SOFTWARE, null);
+            log("software layer on");
+        }
         setContentView(web);
         // debug 包开启 WebView 远程调试（chrome://inspect），release 自动关闭
         if (BuildConfig.DEBUG) {
@@ -59,17 +150,47 @@ public class MainActivity extends Activity {
             public void onReceivedError(WebView view, WebResourceRequest request,
                                         WebResourceError error) {
                 if (request.isForMainFrame()) {
+                    log("page error: " + error.getErrorCode() + " " + error.getDescription());
                     showServerDialog("连不上服务器，请检查 NAS 是否在线、地址是否正确");
                 }
             }
-        });
 
-        String server = sp.getString(KEY_SERVER, "");
-        if (server.isEmpty()) {
-            showServerDialog(null);
-        } else {
-            web.loadUrl(server + "/");
-        }
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                // 活到这 = 本次启动没崩，清掉面包屑
+                deleteLog();
+            }
+
+            @Override
+            public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                // 渲染进程崩溃默认会杀掉整个 App（白屏闪退的元凶之一）；
+                // 返回 true 接管：重建 WebView 重新加载，App 不死
+                log("renderer gone, didCrash=" + detail.didCrash());
+                setupWebView();
+                String server = sp.getString(KEY_SERVER, "");
+                if (!server.isEmpty()) {
+                    web.loadUrl(server + "/");
+                }
+                return true;
+            }
+        });
+    }
+
+    /** 上次崩溃的面包屑展示：看完后继续正常启动 */
+    private void showLastLogDialog(String content) {
+        ScrollView sv = new ScrollView(this);
+        TextView tv = new TextView(this);
+        tv.setText("上次启动中断，日志如下（拍照发给开发者）：\n\n" + content);
+        tv.setTextSize(13);
+        int pad = (int) (16 * getResources().getDisplayMetrics().density);
+        tv.setPadding(pad, pad, pad, pad);
+        sv.addView(tv);
+        new AlertDialog.Builder(this)
+                .setTitle("启动诊断")
+                .setView(sv)
+                .setPositiveButton("继续启动", (d, w) -> init())
+                .setCancelable(false)
+                .show();
     }
 
     /** 服务器地址设置弹窗（首次启动 / 连接失败 / 按菜单键时弹出） */
@@ -78,18 +199,29 @@ public class MainActivity extends Activity {
         input.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
         input.setText(sp.getString(KEY_SERVER, DEFAULT_SERVER));
         input.setSelection(input.getText().length());
+        final CheckBox soft = new CheckBox(this);
+        soft.setText("兼容模式（白屏闪退时勾选）");
+        soft.setChecked(sp.getBoolean(KEY_SOFT_RENDER, false));
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.addView(input);
+        box.addView(soft);
         new AlertDialog.Builder(this)
                 .setTitle("NAS 服务器地址")
                 .setMessage(err == null
                         ? "首次使用，请输入 Dash Spark Media 在 NAS 上的地址："
                         : err + "\n\n请确认地址：")
-                .setView(input)
+                .setView(box)
                 .setPositiveButton("连接", (d, w) -> {
                     String url = input.getText().toString().trim();
                     if (!url.startsWith("http")) {
                         url = "http://" + url;
                     }
-                    sp.edit().putString(KEY_SERVER, url).apply();
+                    sp.edit().putString(KEY_SERVER, url)
+                            .putBoolean(KEY_SOFT_RENDER, soft.isChecked()).apply();
+                    log("loadUrl " + url + ", softRender=" + soft.isChecked());
+                    // 软渲染开关变了要重建 WebView 才生效
+                    setupWebView();
                     web.loadUrl(url + "/");
                 })
                 .setNegativeButton("取消", null)
@@ -136,11 +268,12 @@ public class MainActivity extends Activity {
          * 遥控器可选音轨/字幕/选集；音轨解不了自动回落服务端 AAC 转码。
          * subsJson: [{"label","url","ext"}]，epsJson: [{"id","label","name"}]，可为 null。
          */
-        @JavascriptInterface
+        @android.webkit.JavascriptInterface
         public void play(final String url, final String title, final String subsJson,
                          final String epsJson) {
             runOnUiThread(() -> {
-                Intent i = new Intent(MainActivity.this, PlayerActivity.class);
+                android.content.Intent i = new android.content.Intent(
+                        MainActivity.this, PlayerActivity.class);
                 i.putExtra("url", url);
                 i.putExtra("title", title);
                 i.putExtra("subs", subsJson);
@@ -154,18 +287,18 @@ public class MainActivity extends Activity {
         }
 
         /** 旧版网页缓存可能还在调两参/三参版本，兼容转发。 */
-        @JavascriptInterface
+        @android.webkit.JavascriptInterface
         public void play(final String url, final String title, final String subsJson) {
             play(url, title, subsJson, null);
         }
 
-        @JavascriptInterface
+        @android.webkit.JavascriptInterface
         public void play(final String url, final String title) {
             play(url, title, null, null);
         }
 
         /** 观影端首页「继续观看」栏：原生播放器的续播存档（pos_<id> → 毫秒） */
-        @JavascriptInterface
+        @android.webkit.JavascriptInterface
         public String getResume() {
             try {
                 return new org.json.JSONObject(
