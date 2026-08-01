@@ -20,12 +20,6 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.text.SimpleDateFormat;
-import java.util.Date;
-import java.util.Locale;
-
 /**
  * Dash Spark Media · 观影端 TV 壳：
  * - WebView 加载 NAS 上的观影页（海报墙/搜索/过滤）
@@ -33,9 +27,11 @@ import java.util.Locale;
  *   音轨解不了自动回落服务端 AAC 转码），不跳外部 App
  *
  * xgimi-debug 分支：极米 GMUI 白屏闪退排查
- * - 面包屑日志：每步写文件，进程崩掉后最后一行就是死亡位置，下次启动先弹出来
+ * - 面包屑日志（BootLog）：每步写文件，进程崩掉后下次启动先弹出来
  * - onRenderProcessGone：WebView 渲染进程崩溃时重建而不是整 App 陪葬（API 26+）
  * - 服务器弹窗加「兼容模式」开关：WebView 改软件渲染，绕开部分 ROM 的 GPU 崩溃
+ * - getDefaultVideoPoster 返回 1x1 占位图：老 WebView 默认实现返回 null，
+ *   页面含无 poster 的 <video> 时其内部 getWidth() NPE 整 App 闪退（实锤根因）
  */
 public class MainActivity extends Activity {
 
@@ -43,41 +39,12 @@ public class MainActivity extends Activity {
     private static final String KEY_SERVER = "server";
     private static final String KEY_SOFT_RENDER = "soft_render";
     private static final String DEFAULT_SERVER = "http://192.168.1.107:8115";
-    private static final String LOG_FILE = "boot_log.txt";
 
     private WebView web;
     private SharedPreferences sp;
 
-    // ---------- 面包屑日志（进程崩了文件还在） ----------
-
     private void log(String msg) {
-        String line = new SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.US)
-                .format(new Date()) + "  " + msg + "\n";
-        try (FileOutputStream f = openFileOutput(LOG_FILE, MODE_APPEND)) {
-            f.write(line.getBytes());
-        } catch (Exception ignored) {
-        }
-        Log.i("MediaHub", msg);
-    }
-
-    private String readLog() {
-        File f = getFileStreamPath(LOG_FILE);
-        if (!f.exists()) {
-            return null;
-        }
-        try {
-            byte[] buf = new byte[(int) Math.min(f.length(), 8192)];
-            try (java.io.FileInputStream in = openFileInput(LOG_FILE)) {
-                int n = in.read(buf);
-                return n > 0 ? new String(buf, 0, n) : null;
-            }
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private void deleteLog() {
-        getFileStreamPath(LOG_FILE).delete();
+        BootLog.log(this, msg);
     }
 
     // ---------- 生命周期 ----------
@@ -96,9 +63,9 @@ public class MainActivity extends Activity {
         sp = getSharedPreferences(PREFS, MODE_PRIVATE);
 
         // 上次启动留下了日志 = 上次没活到页面加载完成（崩了）→ 先弹出来给人看
-        String lastLog = readLog();
+        String lastLog = BootLog.read(this);
         if (lastLog != null) {
-            deleteLog();
+            BootLog.clear(this);
             showLastLogDialog(lastLog);
         } else {
             init();
@@ -167,7 +134,7 @@ public class MainActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 // 活到这 = 本次启动没崩，清掉面包屑
-                deleteLog();
+                BootLog.clear(MainActivity.this);
             }
 
             @Override

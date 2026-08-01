@@ -125,6 +125,14 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .modal .mbody { padding: 18px; }
 .mclose { background: none; border: none; color: var(--muted); font-size: 22px; line-height: 1; }
 .mclose:hover { color: var(--text); }
+/* 关掉 UA 默认焦点框（老 TV WebView 画的是方形蓝框，和圆形按钮底不搭） */
+.mclose:focus { outline: none !important; }
+/* 详情弹窗只要一个悬浮 ×：不要整条 sticky 标题栏（灰条），标题本来为空 */
+#detailModal .mhead {
+  position: absolute; top: 8px; right: 12px; z-index: 3;
+  padding: 0; border-bottom: none; background: transparent;
+}
+#detailModal .mhead h3 { display: none; }
 /* TV 字体缺 ✕ 字形：内联 SVG 关闭图标（currentColor 跟随按钮色） */
 .x-ic { width: 16px; height: 16px; display: block; margin: auto; }
 
@@ -144,7 +152,7 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 /* 剧集列表与弹窗边界保持固定距离 */
 .ep-list { margin-top: 18px; padding-bottom: 8px; }
 /* 观影端集数数字方框（间距用 margin：TV WebView Chrome 66 不支持 flex gap） */
-.ep-pills { display: flex; flex-wrap: wrap; margin-top: 18px; padding-bottom: 8px; }
+.ep-pills { display: flex; flex-wrap: wrap; margin-top: 18px; padding: 0 18px 8px; }
 .ep-pill {
   min-width: 32px; height: 25px; padding: 0 8px; border: none; border-radius: 5px;
   margin: 0 16px 8px 0;

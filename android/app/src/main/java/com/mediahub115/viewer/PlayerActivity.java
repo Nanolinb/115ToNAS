@@ -57,10 +57,10 @@ import java.util.regex.Pattern;
  * 浏览器 WebView 解不了的在这里也能播），应用内完成，不跳外部 App。
  *
  * - 播放/暂停/进度条用 ExoPlayer 原生控制器；额外补一排电视需要的按钮：
- *   音轨、字幕、选集（剧集才显示），随控制器一起出现/隐藏
+ *   音轨、字幕、字幕校准（±0.5s）、选集（剧集才显示），随控制器一起出现/隐藏
  * - 外挂字幕：服务端 srt→vtt 直挂，ass 走 ExoPlayer 自带 SSA 解析
  * - 音轨解码失败（无 DTS/TrueHD 授权）→ 自动回落服务端 ?audio=aac 转码流
- * - 遥控器左右键快退/快进 10 秒（控制器隐藏时）
+ * - 遥控器：OK/上 唤出控制条（进度条），下 弹出底部菜单条，左右 快退/快进
  * - 续播：每 5 秒记录进度到 SharedPreferences + 同步服务端（跨设备共享），
  *   再打开时按两者较大值弹窗问「继续播放/从头开始」
  * - 选集切集：按影片 id 向服务端拉播放信息（带 WebView 同源 Cookie，观影密码下也能播）
@@ -84,6 +84,8 @@ public class PlayerActivity extends Activity {
     private String posKey;        // 续播存档键（按影片 id，playlink 令牌每次变，不能按 URL）
     private String mediaId;       // 影片 id（AAC 回退/切集时用）
     private String apiBase;       // 服务器 origin（playUrl 里 /api/ 之前的部分）
+    private float userSubOffset;  // 手动字幕校准（秒：正=提前 负=延后，按影片记忆）
+    private long baseSubOffSec;   // 本次 load 的对齐偏移（AAC 转码关键帧对齐）
 
     private final Handler handler = new Handler(Looper.getMainLooper());
     // 自动隐藏菜单条时把焦点交回播放画面：否则焦点残留在看不见的按钮上，
@@ -113,6 +115,7 @@ public class PlayerActivity extends Activity {
         cookie = getIntent().getStringExtra("cookie");
         int apiIdx = url == null ? -1 : url.indexOf("/api/");
         apiBase = apiIdx > 0 ? url.substring(0, apiIdx) : "";
+        BootLog.log(this, "player open: " + title + " | " + url);
 
         // letterbox 区域必须纯黑：默认主题窗口底色是灰的，宽银幕片上下灰边刺眼
         getWindow().getDecorView().setBackgroundColor(Color.BLACK);
@@ -163,12 +166,20 @@ public class PlayerActivity extends Activity {
         // 老 Amlogic 芯片，ExoPlayer 会整条放弃视频轨 → 黑屏有声），才把
         // video/dolby-vision 重定向到 HEVC 解码器解基础层（DV 增强层被丢弃，
         // 画面退回 HDR10），至少能看。
+        // 例外：AAC 回退流是 ffmpeg 重封装的 fMP4，DV 认证机（极米）的杜比
+        // 解码器对重封装后的 DV 配置盒可能拒解（Source error），回退流一律
+        // 走 HEVC 基础层，先保住能播。
         final MediaCodecSelector dvFallbackSelector = new MediaCodecSelector() {
             @Override
             public List<MediaCodecInfo> getDecoderInfos(String mimeType,
                     boolean requiresSecureDecoder, boolean requiresTunnelingDecoder)
                     throws DecoderQueryException {
                 if (MimeTypes.VIDEO_DOLBY_VISION.equals(mimeType)) {
+                    if (aacFallback) {
+                        return MediaCodecSelector.DEFAULT.getDecoderInfos(
+                                MimeTypes.VIDEO_H265, requiresSecureDecoder,
+                                requiresTunnelingDecoder);
+                    }
                     List<MediaCodecInfo> dv = MediaCodecSelector.DEFAULT.getDecoderInfos(
                             mimeType, requiresSecureDecoder, requiresTunnelingDecoder);
                     if (!dv.isEmpty()) {
@@ -223,6 +234,9 @@ public class PlayerActivity extends Activity {
         player.addListener(new Player.Listener() {
             @Override
             public void onPlayerError(PlaybackException error) {
+                BootLog.log(PlayerActivity.this, "player error: " + error.errorCodeName
+                        + " / " + error.getMessage()
+                        + (error.getCause() != null ? " / cause: " + error.getCause() : ""));
                 if (!aacFallback) {
                     switchToAac("解码失败，已切换服务端 AAC 转码");
                 } else {
@@ -239,14 +253,24 @@ public class PlayerActivity extends Activity {
                 trackChecked = true;
                 // 文件有音轨但设备一条都选不中（无授权解码器）→ 播放会无声，转 AAC
                 boolean hasAudio = false, selectedAudio = false;
+                StringBuilder audioCodecs = new StringBuilder();
                 for (Tracks.Group g : tracks.getGroups()) {
                     if (g.getType() == C.TRACK_TYPE_AUDIO) {
                         hasAudio = true;
                         if (g.isSelected()) {
                             selectedAudio = true;
                         }
+                        String c = g.getTrackFormat(0).codecs;
+                        if (c != null) {
+                            if (audioCodecs.length() > 0) {
+                                audioCodecs.append(',');
+                            }
+                            audioCodecs.append(c);
+                        }
                     }
                 }
+                BootLog.log(PlayerActivity.this, "tracks: audio=[" + audioCodecs
+                        + "] hasAudio=" + hasAudio + " selected=" + selectedAudio);
                 if (hasAudio && !selectedAudio) {
                     switchToAac("设备不支持该音轨，已切换服务端 AAC 转码");
                 }
@@ -258,7 +282,7 @@ public class PlayerActivity extends Activity {
         startPlayback();
     }
 
-    /** 底部半透明菜单条：音轨 / 字幕 / 选集（剧集才有）/ 关闭，遥控器左右键选择 */
+    /** 底部半透明菜单条：音轨 / 字幕 / 字幕校准 / 选集（剧集才有）/ 关闭，遥控器左右键选择 */
     private View buildMenuBar() {
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
@@ -274,6 +298,13 @@ public class PlayerActivity extends Activity {
         Button btnSubs = barButton("字幕");
         btnSubs.setOnClickListener(v -> showTrackDialog(C.TRACK_TYPE_TEXT, "选择字幕"));
         bar.addView(btnSubs, btnLp());
+        // 外挂字幕整体平移：字幕比画面慢（出现太晚）按「提前」，太快按「延后」
+        Button btnSubEarly = barButton("字幕提前");
+        btnSubEarly.setOnClickListener(v -> adjustSubOffset(0.5f));
+        bar.addView(btnSubEarly, btnLp());
+        Button btnSubLate = barButton("字幕延后");
+        btnSubLate.setOnClickListener(v -> adjustSubOffset(-0.5f));
+        bar.addView(btnSubLate, btnLp());
         boolean hasEps;
         try {
             hasEps = new JSONArray(epsJson == null ? "[]" : epsJson).length() > 0;
@@ -389,8 +420,11 @@ public class PlayerActivity extends Activity {
             if (f.label != null && !f.label.isEmpty()) {
                 bits.add(f.label);
             }
-            if (f.codecs != null) {
+            if (f.codecs != null && !f.codecs.startsWith("application/")) {
                 bits.add(f.codecs);
+            } else if (f.sampleMimeType != null && f.sampleMimeType.contains("tx3g")) {
+                // MP4 内嵌 tx3g 字幕轨：codecs 是原始 MIME 名，换成可读标签
+                bits.add("内嵌");
             }
             if (!bits.isEmpty()) {
                 sb.append(" · ").append(android.text.TextUtils.join(" / ", bits));
@@ -483,7 +517,7 @@ public class PlayerActivity extends Activity {
         }).start();
     }
 
-    /** 切换影片引用：重置解码/续播状态 */
+    /** 切换影片引用：重置解码/续播状态 + 读回该片的字幕校准值 */
     private void applyMediaRef(String newUrl, String newTitle, String newSubs) {
         url = newUrl;
         title = newTitle;
@@ -493,6 +527,9 @@ public class PlayerActivity extends Activity {
         Matcher m = MEDIA_ID.matcher(url == null ? "" : url);
         mediaId = m.find() ? m.group(1) : null;
         posKey = mediaId == null ? null : "pos_" + mediaId;
+        userSubOffset = mediaId == null ? 0f
+                : getSharedPreferences(PREFS, MODE_PRIVATE)
+                        .getFloat("suboff_" + mediaId, 0f);
         setTitle(title == null ? "" : title);
     }
 
@@ -588,13 +625,16 @@ public class PlayerActivity extends Activity {
 
     /**
      * subOffSec：转码流的起点对齐偏移（服务端把流起点对齐到关键帧落点 V）。
-     * 字幕是绝对时间轴，>0 时给字幕 URL 带 ?offset=V，服务端整体平移 cue。
+     * 字幕是绝对时间轴，外挂字幕 URL 统一带 ?offset=V+userSubOffset，
+     * 服务端整体平移 cue（正=提前 负=延后）。
      */
     private void load(String u, long startMs, long subOffSec) {
         // Activity 销毁后 AAC 回退线程的回调可能才到：player 已释放，直接丢弃
         if (player == null || isFinishing() || isDestroyed()) {
             return;
         }
+        baseSubOffSec = subOffSec;
+        float effOff = subOffSec + userSubOffset;
         MediaItem.Builder mb = new MediaItem.Builder().setUri(u);
         List<MediaItem.SubtitleConfiguration> cfgs = new ArrayList<>();
         try {
@@ -605,8 +645,8 @@ public class PlayerActivity extends Activity {
                 String mime = (ext.equals("ass") || ext.equals("ssa"))
                         ? MimeTypes.TEXT_SSA : MimeTypes.TEXT_VTT;
                 String subUrl = o.getString("url");
-                if (subOffSec > 0) {
-                    subUrl += (subUrl.contains("?") ? "&" : "?") + "offset=" + subOffSec;
+                if (effOff != 0) {
+                    subUrl += (subUrl.contains("?") ? "&" : "?") + "offset=" + effOff;
                 }
                 cfgs.add(new MediaItem.SubtitleConfiguration.Builder(
                         Uri.parse(subUrl))
@@ -625,6 +665,23 @@ public class PlayerActivity extends Activity {
         player.setMediaItem(mb.build(), startMs);
         player.prepare();
         player.play();
+    }
+
+    /** 手动字幕校准：±0.5s 步进，按影片记忆；重建外挂字幕轨即时生效 */
+    private void adjustSubOffset(float delta) {
+        userSubOffset = Math.round((userSubOffset + delta) * 10) / 10f;
+        if (mediaId != null) {
+            getSharedPreferences(PREFS, MODE_PRIVATE)
+                    .edit().putFloat("suboff_" + mediaId, userSubOffset).apply();
+        }
+        String dir = userSubOffset > 0 ? "提前" : (userSubOffset < 0 ? "延后" : "归零");
+        Toast.makeText(this, "字幕" + dir + " "
+                + String.format(java.util.Locale.US, "%+.1f", userSubOffset) + "s",
+                Toast.LENGTH_SHORT).show();
+        pokeMenuBar();
+        if (player != null && url != null) {
+            load(url, Math.max(0, player.getCurrentPosition()), baseSubOffSec);
+        }
     }
 
     /** 按字幕文件名/标签推断 BCP-47 语言：简中 zh-Hans > 繁中 zh-Hant > 中文 zh */
@@ -667,6 +724,8 @@ public class PlayerActivity extends Activity {
             final long start = v;
             runOnUiThread(() -> {
                 String sep = url.contains("?") ? "&" : "?";
+                BootLog.log(PlayerActivity.this,
+                        "aac fallback: " + url + sep + "audio=aac&t=" + posSec);
                 load(url + sep + "audio=aac&t=" + posSec,
                         Math.max(0, (posSec - start) * 1000), start);
             });
@@ -714,9 +773,22 @@ public class PlayerActivity extends Activity {
         in.close();
     }
 
+    /**
+     * 在 dispatch 层拦截方向键：PlayerView 自己会把「下」「OK」等键消费成
+     * 唤出控制条，Activity.onKeyDown 根本收不到（极米上按下只弹进度条的根因）。
+     */
     @Override
-    public boolean onKeyDown(int keyCode, KeyEvent event) {
-        // 底部菜单条显示时：方向键交给按钮焦点导航，返回键收起菜单条
+    public boolean dispatchKeyEvent(KeyEvent event) {
+        if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0
+                && handleKey(event.getKeyCode())) {
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
+    /** 返回 true = 已消费；false = 交回默认分发（按钮焦点导航/控制条按键） */
+    private boolean handleKey(int keyCode) {
+        // 底部菜单条显示时：方向键交给按钮焦点导航，返回/菜单键收起菜单条
         if (menuBar.getVisibility() == View.VISIBLE) {
             switch (keyCode) {
                 case KeyEvent.KEYCODE_BACK:
@@ -730,9 +802,9 @@ public class PlayerActivity extends Activity {
                 case KeyEvent.KEYCODE_DPAD_UP:
                 case KeyEvent.KEYCODE_DPAD_DOWN:
                     pokeMenuBar();
-                    return super.onKeyDown(keyCode, event);
+                    return false;
                 default:
-                    return super.onKeyDown(keyCode, event);
+                    return false;
             }
         }
         switch (keyCode) {
@@ -756,17 +828,19 @@ public class PlayerActivity extends Activity {
                 // 控制条亮着时，方向键交给它做焦点导航（可下选到进度条）；
                 // 否则方向键下弹出菜单条
                 if (view.isControllerFullyVisible()) {
-                    return super.onKeyDown(keyCode, event);
+                    return false;
                 }
                 showMenuBar();
                 return true;
             case KeyEvent.KEYCODE_DPAD_UP:
-                // 方向键上：唤出原生控制器（播放/暂停/进度条）
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+                // 上 / OK：唤出原生控制器（播放/暂停/进度条）；已亮则交给控制条
                 if (!view.isControllerFullyVisible()) {
                     view.showController();
                     return true;
                 }
-                return super.onKeyDown(keyCode, event);
+                return false;
             case KeyEvent.KEYCODE_DPAD_LEFT:
             case KeyEvent.KEYCODE_DPAD_RIGHT:
                 // 控制条没亮：第一下左/右只唤出控制条，不跳转；
@@ -783,7 +857,7 @@ public class PlayerActivity extends Activity {
                 view.showController();
                 return true;
             default:
-                return super.onKeyDown(keyCode, event);
+                return false;
         }
     }
 

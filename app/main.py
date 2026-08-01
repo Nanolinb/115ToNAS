@@ -914,8 +914,9 @@ def _sec_to_vtt_ts(sec: float) -> str:
 
 def _shift_vtt(text: str, offset: float) -> str:
     """转码流从 offset 秒重起时时间轴从 0 开始，而字幕是绝对时间：
-    把所有 cue 前移 offset 秒；整体落在 offset 之前的 cue 丢弃。"""
-    if offset <= 0:
+    把所有 cue 前移 offset 秒；整体落在 offset 之前的 cue 丢弃。
+    offset 也用于播放器手动校准：正值=字幕提前，负值=字幕延后。"""
+    if offset == 0:
         return text
     out, lines = [], text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     i, n = 0, len(lines)
