@@ -109,7 +109,7 @@ async function playMedia(id) {
     track.kind = 'subtitles';
     track.label = t.label || t.lang || `字幕 ${i + 1}`;
     track.srclang = t.lang === 'en' ? 'en' : 'zh';
-    track.src = `/api/subtitle/${id}/${i}`;
+    track.src = `/api/subtitle/${id}/${i}?fmt=vtt`;  // ass 由服务端在线转 vtt（浏览器只认 vtt）
     if (i === 0) track.default = true;
     video.appendChild(track);
   });

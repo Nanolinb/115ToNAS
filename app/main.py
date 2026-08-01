@@ -914,6 +914,50 @@ def _vtt_ts_to_sec(s: str):
             + int(m.group(3)) + int(m.group(4)) / 1000)
 
 
+def _ass_to_vtt(text: str) -> str:
+    """ASS/SSA → VTT（网页端用：浏览器 <track> 只认 vtt）。
+    只搬 Dialogue 的时间轴与纯文本，字体/定位等样式丢弃（网页端够看）。"""
+    def ts(t: str) -> str:
+        # H:MM:SS.cc（厘秒）→ HH:MM:SS.mmm
+        m = re.match(r"(\d+):(\d{2}):(\d{2})\.(\d{2})", t.strip())
+        if not m:
+            return "00:00:00.000"
+        return f"{int(m.group(1)):02d}:{m.group(2)}:{m.group(3)}.{m.group(4)}0"
+    out = ["WEBVTT", ""]
+    in_events = False
+    fmt_cols = []
+    for raw in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if line.startswith("["):
+            in_events = line.lower() == "[events]"
+            continue
+        if not in_events:
+            continue
+        if line.lower().startswith("format:"):
+            fmt_cols = [c.strip().lower() for c in line[7:].split(",")]
+            continue
+        if not line.lower().startswith("dialogue:"):
+            continue
+        # Text 列在最后是惯例，按 Format 列数切可保正文里的逗号不被切开
+        parts = (line[9:].split(",", len(fmt_cols) - 1) if fmt_cols
+                 else line[9:].split(",", 9))
+        try:
+            i_start = fmt_cols.index("start") if fmt_cols else 1
+            i_end = fmt_cols.index("end") if fmt_cols else 2
+            start, end, body = parts[i_start], parts[i_end], parts[-1]
+        except (ValueError, IndexError):
+            continue
+        body = re.sub(r"\{[^}]*\}", "", body)  # 去掉 {\pos(...)}{\fs24} 这类覆盖块
+        body = (body.replace("\\N", "\n").replace("\\n", "\n")
+                    .replace("\\h", " ").strip())
+        if not body:
+            continue
+        out.append(f"{ts(start)} --> {ts(end)}")
+        out.append(body)
+        out.append("")
+    return "\n".join(out)
+
+
 def _sec_to_vtt_ts(sec: float) -> str:
     sec = max(0.0, sec)
     h = int(sec // 3600)
@@ -955,12 +999,12 @@ def _shift_vtt(text: str, offset: float) -> str:
 
 
 @app.get("/api/subtitle/{media_id}")
-async def subtitle(media_id: int, offset: float = 0):
-    return await subtitle_track(media_id, 0, offset)
+async def subtitle(media_id: int, offset: float = 0, fmt: str = ""):
+    return await subtitle_track(media_id, 0, offset, fmt)
 
 
 @app.get("/api/subtitle/{media_id}/{idx}")
-async def subtitle_track(media_id: int, idx: int, offset: float = 0):
+async def subtitle_track(media_id: int, idx: int, offset: float = 0, fmt: str = ""):
     row = db.one("SELECT subs, sub_path FROM media WHERE id=?", (media_id,))
     if not row:
         raise HTTPException(404, "无字幕")
@@ -983,7 +1027,7 @@ async def subtitle_track(media_id: int, idx: int, offset: float = 0):
                 p = alt
         if not p.exists():
             raise HTTPException(404, "字幕文件不存在")
-    offset = min(max(0.0, offset or 0.0), 24 * 3600)
+    offset = min(max(-3600.0, offset or 0.0), 24 * 3600)  # 负值=手动校准延后
     text = subtitles.read_sub_text(p)
     if p.suffix.lower() == ".srt":
         vtt = "WEBVTT\n\n" + re.sub(r"(\d{2}:\d{2}:\d{2}),(\d{3})",
@@ -993,7 +1037,10 @@ async def subtitle_track(media_id: int, idx: int, offset: float = 0):
     if p.suffix.lower() == ".vtt":
         return Response(_shift_vtt(_strip_ass_tags(text), offset),
                         media_type="text/vtt; charset=utf-8")
-    # ass/ssa 浏览器无法渲染，原样返回供下载
+    # ass/ssa：网页 <track> 只认 vtt → 在线转换；原生 ExoPlayer 能解 SSA，走原文
+    if fmt == "vtt":
+        return Response(_shift_vtt(_ass_to_vtt(text), offset),
+                        media_type="text/vtt; charset=utf-8")
     return Response(text, media_type="text/plain; charset=utf-8")
 
 
