@@ -206,9 +206,10 @@ body.tv-mode #page-library { display: none; }
   position: absolute; left: 0; top: 0; bottom: 0; z-index: 6;
   width: 216px; padding: 2px 0 12px 20px; overflow-y: auto;
   background: linear-gradient(90deg, rgba(9,11,15,.97) 0%, rgba(9,11,15,.93) 82%, rgba(9,11,15,.78) 100%);
-  /* 收拢位移要多走 20px：#tvHome 相对屏幕左缘有 body 内边距 20px 的偏移，
-     只移 -100% 右缘 20px 仍露在屏上（一条带省略号残片的深色硬边） */
-  transform: translateX(calc(-100% - 20px));
+  /* 收拢位移：main 有 max-width:1400px + margin:auto 居中，宽视口下 #tvHome
+     距屏幕左缘最远 (100vw-1400)/2 px，只减固定 20px 会在宽屏露出半条左栏
+     （4K/1600+ 布局实测复现）。多减 50vw 任何视口都保证出屏 */
+  transform: translateX(calc(-100% - 50vw));
   transition: transform .28s ease;
 }
 #tvHome.rail-open #tvRail { transform: none; }

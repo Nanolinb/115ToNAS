@@ -80,11 +80,16 @@ async function playMedia(id) {
       const pl = await api(`/api/media/${id}/playlink`);
       tvUrl = location.origin + pl.url;
     } catch (e) {}
-    const tvSubs = (d.subs || []).map((t, i) => ({
-      label: t.label || t.lang || `字幕 ${i + 1}`,
-      url: `${location.origin}/api/subtitle/${id}/${i}`,
-      ext: 'vtt',
-    }));
+    // 字幕格式按文件后缀传：ass 要给原生 ExoPlayer 走 SSA 解码，
+    // 硬标 vtt 会被 WebVTT 解析器吃掉 → 轨道选中但一条都不渲染（E01 实测）
+    const tvSubs = (d.subs || []).map((t, i) => {
+      const suffix = (t.path || '').split('.').pop().toLowerCase();
+      return {
+        label: t.label || t.lang || `字幕 ${i + 1}`,
+        url: `${location.origin}/api/subtitle/${id}/${i}`,
+        ext: (suffix === 'ass' || suffix === 'ssa') ? 'ass' : 'vtt',
+      };
+    });
     // 剧集的选集列表（原生播放器里「选集」按钮用）；电影/单集为空数组
     let eps = [];
     try {
@@ -127,15 +132,27 @@ async function playMedia(id) {
   let info = { available: false, audio: 0, audio_codecs: [], audio_tracks: [], preferred_audio: 0 };
   try { info = await api(`/api/media/${id}/tracks`); } catch (e) {}
 
-  // 内嵌文本字幕轨：浏览器读不了容器内字幕，服务端 ffmpeg 抽轨转 vtt
+  // 内嵌文本字幕轨：浏览器读不了容器内字幕，服务端 ffmpeg 抽轨转 vtt。
+  // 标签里剥掉 [Forced]/[SDH] 等标记：Chrome 看到 Forced 会无视 JS 设置、
+  // 固执地把这条轨点亮（中外两条叠屏，看着像错配）
   (info.embedded_subs || []).forEach((t) => {
     const track = document.createElement('track');
     track.kind = 'subtitles';
-    track.label = `内嵌 ${t.lang || '?'}${t.title ? ' ' + t.title : ''}`;
+    const tag = (t.title || '').replace(/\[[^\]]*\]/g, '').trim();
+    track.label = `内嵌 ${t.lang || '?'}${tag ? ' ' + tag : ''}`;
     track.srclang = t.lang || 'und';
     track.src = `/api/esub/${id}/${t.n}`;
     video.appendChild(track);
   });
+  // 只让默认轨（外挂第 1 条）显示：浏览器会把 forced 内嵌轨也自动点亮，
+  // 中外两条字幕同时叠屏（用户看着像「字幕错配」）。
+  // 必须在元数据加载/起播后再压：src 加载过程中 Chrome 会按自己的逻辑重选轨道
+  const forceSingleSub = () => {
+    Array.from(video.textTracks).forEach((t, i) => { t.mode = i === 0 ? 'showing' : 'disabled'; });
+  };
+  forceSingleSub();
+  video.onloadedmetadata = forceSingleSub;
+  video.onplay = forceSingleSub;
 
   const badCodecs = (info.audio_codecs || []).filter((c) => !BROWSER_AUDIO_OK.has(c));
   const tracks = info.audio_tracks || [];
