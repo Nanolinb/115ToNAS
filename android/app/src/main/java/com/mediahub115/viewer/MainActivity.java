@@ -172,30 +172,83 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    /** 服务器地址设置弹窗（首次启动 / 连接失败 / 按菜单键时弹出） */
+    /** 服务器地址设置弹窗（首次启动 / 连接失败 / 按菜单键时弹出）。
+     *  IP 与端口分开填：前缀默认 192.168.（可改，如 Tailscale 100.x）、
+     *  只需补后两段；端口默认 8115，一般不用动。 */
     private void showServerDialog(String err) {
-        final EditText input = new EditText(this);
-        input.setInputType(InputType.TYPE_TEXT_VARIATION_URI);
-        input.setText(sp.getString(KEY_SERVER, DEFAULT_SERVER));
-        input.setSelection(input.getText().length());
+        // 解析已存地址：前缀(前两段) / 第三段 / 第四段 / 端口
+        String prefix = "192.168.", o3 = "", o4 = "", port = "8115";
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "^https?://(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)(?::(\\d+))?/?$")
+                .matcher(sp.getString(KEY_SERVER, ""));
+        if (m.matches()) {
+            prefix = m.group(1) + "." + m.group(2) + ".";
+            o3 = m.group(3);
+            o4 = m.group(4);
+            if (m.group(5) != null) {
+                port = m.group(5);
+            }
+        }
+
+        final EditText inPrefix = new EditText(this);
+        inPrefix.setText(prefix);
+        inPrefix.setInputType(InputType.TYPE_CLASS_TEXT);
+        final EditText inO3 = new EditText(this);
+        inO3.setHint("x");
+        inO3.setText(o3);
+        inO3.setInputType(InputType.TYPE_CLASS_NUMBER);
+        final EditText inO4 = new EditText(this);
+        inO4.setHint("x");
+        inO4.setText(o4);
+        inO4.setInputType(InputType.TYPE_CLASS_NUMBER);
+        final EditText inPort = new EditText(this);
+        inPort.setText(port);
+        inPort.setInputType(InputType.TYPE_CLASS_NUMBER);
+
+        TextView dot = new TextView(this);
+        dot.setText(".");
+        TextView colon = new TextView(this);
+        colon.setText(":");
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(inPrefix, new LinearLayout.LayoutParams(0, -2, 4f));
+        row.addView(inO3, new LinearLayout.LayoutParams(0, -2, 2f));
+        row.addView(dot);
+        row.addView(inO4, new LinearLayout.LayoutParams(0, -2, 2f));
+        row.addView(colon);
+        row.addView(inPort, new LinearLayout.LayoutParams(0, -2, 3f));
+
         final CheckBox soft = new CheckBox(this);
         soft.setText("兼容模式（白屏闪退时勾选）");
         soft.setChecked(sp.getBoolean(KEY_SOFT_RENDER, false));
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.addView(input);
+        box.addView(row);
         box.addView(soft);
         new AlertDialog.Builder(this)
                 .setTitle("NAS 服务器地址")
                 .setMessage(err == null
-                        ? "首次使用，请输入 Dash Spark Media 在 NAS 上的地址："
+                        ? "首次使用：输入 NAS 的 IP 后两段与端口（默认 8115）"
                         : err + "\n\n请确认地址：")
                 .setView(box)
                 .setPositiveButton("连接", (d, w) -> {
-                    String url = input.getText().toString().trim();
-                    if (!url.startsWith("http")) {
-                        url = "http://" + url;
+                    String pre = inPrefix.getText().toString().trim();
+                    String ip;
+                    if (inO3.getText().toString().trim().isEmpty()
+                            && inO4.getText().toString().trim().isEmpty()) {
+                        ip = pre;  // 后两段留空 = 前缀框里就是完整 IP（老用户习惯）
+                    } else {
+                        if (!pre.endsWith(".")) {
+                            pre += ".";
+                        }
+                        ip = pre + inO3.getText().toString().trim()
+                                + "." + inO4.getText().toString().trim();
                     }
+                    String p = inPort.getText().toString().trim();
+                    if (p.isEmpty()) {
+                        p = "8115";
+                    }
+                    String url = "http://" + ip + ":" + p;
                     sp.edit().putString(KEY_SERVER, url)
                             .putBoolean(KEY_SOFT_RENDER, soft.isChecked()).apply();
                     log("loadUrl " + url + ", softRender=" + soft.isChecked());

@@ -257,15 +257,18 @@ body.tv-mode .rail-row.tv-focus {
 }
 
 /* ---------- 中部舞台 ----------
-   margin-left 随左栏开/收过渡：收拢时只让开指示条（34px），内容铺开；
-   滑出时右移到 216px，回到紧凑布局（与左栏 transition 同速） */
+   左栏开/收动画用 transform（合成层，零排版）：旧实现是 margin-left 过渡，
+   每帧整页重排（Hero+全量海报行），极米老 WebView 掉帧明显。
+   收拢 margin-left 34px（让开指示条），滑出 translateX(182px)（=216-34） */
 #tvStage {
   flex: 1; display: flex; flex-direction: column; min-width: 0; padding: 0 22px 0 12px;
   position: relative; /* #tvBrowse 绝对定位锚点 */
   margin-left: 34px;
-  transition: margin-left .28s ease;
+  transform: translateX(0);
+  transition: transform .28s ease;
+  will-change: transform;
 }
-#tvHome.rail-open #tvStage { margin-left: 216px; }
+#tvHome.rail-open #tvStage { transform: translateX(182px); }
 
 #tvTabs { display: flex; margin: 2px 0 10px 4px; position: relative; z-index: 2; }
 /* 过滤器胶囊：复用页签样式；.on 表示该过滤器已选非「全部」值。
@@ -389,21 +392,21 @@ body.tv-mode .hc-watch.tv-focus { box-shadow: 0 0 0 3px var(--accent2); backgrou
      而不是被列表边缘硬裁切（-webkit-mask Chrome 66 支持）。
      末尾滚动余量由 .st-tail 占位元素提供（padding-right 在 Chrome 66 不计入滚动区） */
   margin-right: -22px;
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 30px), transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 3vw), transparent 100%);
 }
 /* 向左滚出内容后，左边缘同样渐隐淡出（tvnav.js 按 scrollLeft 切换 .scrolled） */
 #tvShelf.scrolled {
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 30px,
-    #000 calc(100% - 30px), transparent 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 3vw,
+    #000 calc(100% - 3vw), transparent 100%);
 }
 /* 滚到最右端（= 最后一张卡被选中）：右缘渐隐失去意义且会吃掉焦点卡白框，
    去掉右侧渐隐（tvnav.js 同步切换 .at-end） */
 #tvShelf.at-end {
-  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 30px, #000 100%);
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 3vw, #000 100%);
 }
 #tvShelf.at-end:not(.scrolled) { -webkit-mask-image: none; }
 /* 卡片间隔与浏览层一致（margin：Chrome 66 不支持 flex gap） */
-#tvShelf .tcard { margin-right: 14px; }
+#tvShelf .tcard { margin-right: 1.2vw; }
 
 /* ---------- 浏览层：两排全量分类（电影/剧集），浮在 Hero 区上层 ---------- */
 /* 极淡的纵向暗渐变：Hero 大图透出来当背景。TV WebView 视口只有 960x540
@@ -443,14 +446,16 @@ body.tv-mode .hc-watch.tv-focus { box-shadow: 0 0 0 3px var(--accent2); backgrou
 #tvBrowse .br-strip::-webkit-scrollbar { width: 0; height: 0; display: none; }
 /* 浏览层文字名上移：贴近封面，给下排腾出空间 */
 #tvBrowse .tcard .ttitle { margin-top: 4px; }
-#tvBrowse .tcard { margin-right: 14px; }
+#tvBrowse .tcard { margin-right: 1.2vw; }
 /* TV 上不显示滚动条（占位又难看），滚动由遥控器驱动 */
 #tvShelf::-webkit-scrollbar, #tvRail::-webkit-scrollbar { width: 0; height: 0; display: none; }
-/* 卡片基准尺寸：最近更新行与浏览层两排完全对齐（110x160，间距 14px） */
-.tcard { width: 110px; flex-shrink: 0; cursor: pointer; transition: transform .18s ease; }
+/* 卡片基准尺寸：最近更新行与浏览层两排完全对齐，按视口宽度等比——
+   任何分辨率下单行 7 张整卡 + 第 8 张露出约 1/3（卡片 11.5vw + 间距 1.35vw，
+   内容区约 94vw ÷ 12.85vw ≈ 7.3 张）；4K/720p 视觉占比一致 */
+.tcard { width: 11vw; flex-shrink: 0; cursor: pointer; transition: transform .18s ease; }
 .tcard .tp-wrap {
-  /* Chrome 66 不支持 aspect-ratio：固定高度，object-fit 裁齐海报 */
-  position: relative; height: 160px; border-radius: 12px; overflow: hidden;
+  /* Chrome 66 不支持 aspect-ratio：固定高度（= 宽×1.5），object-fit 裁齐海报 */
+  position: relative; height: 16.5vw; border-radius: 12px; overflow: hidden;
   background: var(--card);
   /* 未选中卡只要一圈细细的暗色描边（2px），不再叠 18px 的大范围阴影 */
   border: 2px solid rgba(0,0,0,.5);
@@ -459,10 +464,10 @@ body.tv-mode .hc-watch.tv-focus { box-shadow: 0 0 0 3px var(--accent2); backgrou
 .tcard .tp-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .tcard .tbadge {
   position: absolute; top: 5px; right: 5px; background: rgba(0,0,0,.75);
-  color: var(--accent2); font-size: 10px; padding: 2px 6px; border-radius: 6px;
+  color: var(--accent2); font-size: 1vw; padding: 2px 6px; border-radius: 6px;
 }
 .tcard .ttitle {
-  font-size: 11px; margin-top: 6px; color: rgba(255,255,255,.85);
+  font-size: 1.05vw; margin-top: 6px; color: rgba(255,255,255,.85);
   overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
 }
 /* 聚焦海报：封面略放大浮到最前 + 海报贴边白框（不是大圈光晕） */

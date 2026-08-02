@@ -146,13 +146,17 @@ async function playMedia(id) {
   });
   // 只让默认轨（外挂第 1 条）显示：浏览器会把 forced 内嵌轨也自动点亮，
   // 中外两条字幕同时叠屏（用户看着像「字幕错配」）。
-  // 必须在元数据加载/起播后再压：src 加载过程中 Chrome 会按自己的逻辑重选轨道
+  // Chrome/Edge 在 loadedmetadata/play/canplay 各阶段都可能按自己的逻辑
+  // 重选轨道，起播 10 秒内每个节点都压一次；之后交还用户手动选择
   const forceSingleSub = () => {
     Array.from(video.textTracks).forEach((t, i) => { t.mode = i === 0 ? 'showing' : 'disabled'; });
   };
+  const subT0 = Date.now();
+  const forceEarly = () => { if (Date.now() - subT0 < 10000) forceSingleSub(); };
   forceSingleSub();
-  video.onloadedmetadata = forceSingleSub;
-  video.onplay = forceSingleSub;
+  video.onloadedmetadata = forceEarly;
+  video.onplay = forceEarly;
+  video.oncanplay = forceEarly;
 
   const badCodecs = (info.audio_codecs || []).filter((c) => !BROWSER_AUDIO_OK.has(c));
   const tracks = info.audio_tracks || [];
