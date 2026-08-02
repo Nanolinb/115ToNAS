@@ -110,12 +110,9 @@ public class MainActivity extends Activity {
         // 禁用 WebView 磁盘缓存：服务端已是局域网毫秒级，缓存只会让电视端
         // 停留在旧版 JS/CSS（启发式缓存按 Last-Modified 10% 算新鲜期）
         s.setCacheMode(WebSettings.LOAD_NO_CACHE);
-        // TV 视口锁定 1600 css 宽：4K 面板（如极米 R10）按 device-width 布局时
-        // css 宽 3840，150px 卡片/13px 字体等比缩成一半，左栏竖排指示也小得看不见。
-        // 固定布局宽度后 WebView 整体缩放适配，720p/1080p/4K 观感一致。
-        // 注意不能开 LoadWithOverviewMode：海报行全量后内容超宽，overview
-        // 会把整页缩小适配，左栏/Hero 布局全乱（1.2.2 的教训）
-        s.setUseWideViewPort(true);
+        // 不锁视口宽度：1.2.2/1.2.3 的 width=1600 注入把 TV 布局打乱
+        // （最近更新挤到底部、Hero 右偏），回滚到设备默认视口。
+        // 4K 面板卡片偏小的问题以后在服务端 tv.css 里按 vw 解决，不动 App
 
         web.addJavascriptInterface(new NativeBridge(), "MediaHubNative");
         web.setWebChromeClient(new android.webkit.WebChromeClient() {
@@ -139,10 +136,6 @@ public class MainActivity extends Activity {
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                // TV 布局宽度锁 1600（见 setUseWideViewPort 注释）
-                view.evaluateJavascript(
-                        "var m=document.querySelector('meta[name=viewport]');"
-                                + "if(m)m.setAttribute('content','width=1600');", null);
                 // 活到这 = 本次启动没崩，清掉面包屑
                 BootLog.clear(MainActivity.this);
             }
