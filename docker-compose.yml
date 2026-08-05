@@ -21,8 +21,10 @@ services:
       - 119.29.29.29
     environment:
       TZ: Asia/Shanghai
-      # 如需走代理访问 TMDB，取消下一行注释并填局域网代理地址
-      # HTTPS_PROXY: http://192.168.1.100:7890
+      # NAS 直连外网不通时（QuFirewall/运营商拦截等），全部外网请求走局域网代理
+      # （httpx 默认 trust_env，p115client/字幕/TMDB/下载都生效；流媒体是本地文件不受影响）
+      HTTPS_PROXY: http://192.168.1.107:7890
+      NO_PROXY: localhost,127.0.0.1,192.168.1.0/24
     volumes:
       # 左边是 NAS 上的真实共享文件夹路径，按需修改；
       # 右边 /media 是容器内固定挂载点，不要改
