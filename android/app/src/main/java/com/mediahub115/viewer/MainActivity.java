@@ -233,7 +233,10 @@ public class MainActivity extends Activity {
                         String v = s.toString();
                         if (v.length() == 3
                                 || (v.length() == 2 && Integer.parseInt(v) > 25)) {
-                            seg[idx + 1].requestFocus();
+                            // post 延迟跳焦：事件处理中直接 requestFocus 会被
+                            // 对话框默认按钮（连接）抢走焦点
+                            final EditText next = seg[idx + 1];
+                            next.post(next::requestFocus);
                         }
                     }
                 });
@@ -260,6 +263,12 @@ public class MainActivity extends Activity {
                 .setNegativeButton("取消", null)
                 .setCancelable(false)
                 .show();
+        // 初始焦点放到第一个没填的 IP 段（post 同上防被默认按钮抢焦）
+        if (oct[2].isEmpty()) {
+            seg[2].post(seg[2]::requestFocus);
+        } else if (oct[3].isEmpty()) {
+            seg[3].post(seg[3]::requestFocus);
+        }
         dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
             StringBuilder ip = new StringBuilder();
             for (int i = 0; i < 4; i++) {
