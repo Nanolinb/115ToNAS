@@ -51,7 +51,9 @@ async def scan_directory(root: Path, lib_type: str):
 
 
 def _walk(root: Path):
-    """生成器式遍历，避免一次性加载全部路径到内存。"""
+    """生成器式遍历，避免一次性加载全部路径到内存。
+    跳过 Sample/Samples 目录：里面是发布组附赠的试看片段，不是正片，
+    扫进来会在弹窗里和正片集数重复（Mandalorian S02 实踩）。"""
     stack = [root]
     while stack:
         current = stack.pop()
@@ -62,8 +64,12 @@ def _walk(root: Path):
                     if entry.name.startswith("."):
                         continue
                     if entry.is_dir(follow_symlinks=False):
+                        if entry.name.lower() in ("sample", "samples"):
+                            continue
                         stack.append(Path(entry.path))
                     elif entry.is_file() and parser.is_video(entry.name):
+                        if ".sample." in entry.name.lower():
+                            continue
                         files.append(Path(entry.path))
             yield files
         except OSError:
@@ -74,6 +80,9 @@ async def scan_file(path: Path, lib_type: str, force: bool = False):
     """扫描单个文件：新文件入库 + 匹配元数据；已存在的按需更新。"""
     if not parser.is_video(path.name):
         return  # 字幕等非视频文件永不入库（下载器自动扫描会带进来）
+    if ".sample." in path.name.lower() or "/sample/" in str(path).lower() \
+            or "/samples/" in str(path).lower():
+        return  # 发布组试看片段不入库（与 _walk 的跳过同口径）
     try:
         st = path.stat()
     except OSError:
