@@ -21,10 +21,12 @@ services:
       - 119.29.29.29
     environment:
       TZ: Asia/Shanghai
-      # NAS 直连外网不通时（QuFirewall/运营商拦截等），全部外网请求走局域网代理
-      # （httpx 默认 trust_env，p115client/字幕/TMDB/下载都生效；流媒体是本地文件不受影响）
-      HTTPS_PROXY: http://192.168.1.107:7890
-      NO_PROXY: localhost,127.0.0.1,192.168.1.0/24
+      # 外网代理（可选，默认不启用）：NAS 直连外网不通时（QuFirewall/运营商
+      # 拦截等），所有外网请求走代理（httpx/urllib 默认读 HTTPS_PROXY）。
+      # 代理跑在 NAS 本机（如 mihomo 容器）填 http://127.0.0.1:7890；
+      # 跑在旁路由填 http://<旁路由IP>:<端口>。115 域名在 NO_PROXY 里始终直连。
+      # HTTPS_PROXY: http://127.0.0.1:7890
+      # NO_PROXY: localhost,127.0.0.1,192.168.0.0/16,.115.com
     volumes:
       # 左边是 NAS 上的真实共享文件夹路径，按需修改；
       # 右边 /media 是容器内固定挂载点，不要改
