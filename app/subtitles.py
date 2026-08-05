@@ -193,28 +193,69 @@ def _rank_for(subs: list, target: str, video_stem: str = "") -> list:
 
 async def search_and_download(video_path: Path, title: str, year: int | None) -> list:
     """在线搜刮多语言字幕（简中 / 英文 / 中英双语），返回新保存的轨道列表。
-    来源顺序：assrt（需 token）→ subhd.cc（免 token），只补缺的语言。"""
+    来源顺序：assrt（需 token）→ subhd.cc（免 token），只补缺的语言。
+    剧集带 SxxExx 集数查询，且优先用文件名前缀当搜索标题——数据库标题可能是
+    刮削错的本地化条目（1923 S01E02+ 被匹配成意大利语名），文件名才是最可靠的。"""
     if not title:
         return []
+    ep = _ep_tag(video_path.stem)
+    queries = []
+    if ep:
+        file_title = _title_from_stem(video_path.stem)
+        if file_title and file_title.lower() != title.lower():
+            queries += [f"{file_title} {ep}", f"{title} {ep}"]
+        else:
+            queries.append(f"{title} {ep}")
+    queries.append(f"{title} {year}" if year else title)
+    if year:
+        queries.append(title)
+    alt = title.replace(".", " ").replace("_", " ").strip()
+    if alt != title:
+        queries.append(alt)
+    # 保序去重
+    seen = set()
+    queries = [q for q in queries if not (q in seen or seen.add(q))]
     saved = []
     if db.get_secret("assrt_token", "").strip():
-        saved += await _assrt_download(video_path, title, year)
+        saved += await _assrt_download(video_path, queries)
     have = {t["lang"] for t in saved}
     missing = [(t, sfx) for t, sfx in TRACK_TARGETS if t not in have]
     if missing:
-        saved += await _subhd_download(video_path, title, year, missing)
+        saved += await _subhd_download(video_path, queries, missing)
     return saved
 
 
-async def _assrt_download(video_path: Path, title: str, year: int | None) -> list:
+_EP_TAG_RE = re.compile(r"[sS]\d{1,2}[eE]\d{1,3}")
+
+
+def _ep_tag(stem: str) -> str | None:
+    """从视频文件名提取 S01E01 集数标记（大写零填充），电影返回 None。"""
+    m = _EP_TAG_RE.search(stem)
+    return m.group(0).upper() if m else None
+
+
+def _title_from_stem(stem: str) -> str | None:
+    """文件名里集数标记之前的部分当标题（1923.S01E02.xxx → 1923）。"""
+    m = _EP_TAG_RE.search(stem)
+    if not m:
+        return None
+    t = stem[:m.start()].rstrip("._- ").replace(".", " ").replace("_", " ").strip()
+    return t or None
+
+
+async def _assrt_download(video_path: Path, queries: list) -> list:
     """assrt.net 搜刮（需要设置页配置 token）。"""
     token = db.get_secret("assrt_token", "").strip()
     saved = []
     try:
         async with httpx.AsyncClient(timeout=20) as client:
-            subs = await _search_candidates(client, token, title, year)
+            subs = []
+            for q in queries:
+                subs = await _search(client, token, q)
+                if subs:
+                    break
             if not subs:
-                print(f"[subtitles] assrt 无匹配结果: {title} {year or ''}")
+                print(f"[subtitles] assrt 无匹配结果: {queries}")
                 return []
             stem = video_path.stem
             used_ids = set()
@@ -232,26 +273,26 @@ async def _assrt_download(video_path: Path, title: str, year: int | None) -> lis
                         saved.append(track)
                         break
     except Exception as e:
-        print(f"[subtitles] 搜刮失败 {title}: {type(e).__name__} {e}")
+        print(f"[subtitles] 搜刮失败 {queries}: {type(e).__name__} {e}")
     return saved
 
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 
-async def _subhd_download(video_path: Path, title: str, year: int | None,
-                          targets: list) -> list:
+async def _subhd_download(video_path: Path, queries: list, targets: list) -> list:
     """subhd.cc 搜刮（免 token）：按与文件名的相关度排序后逐语言挑第一条。"""
     from . import subhd
     saved = []
     try:
         async with subhd.client() as cli:
-            kw = f"{title} {year}" if year else title
-            items = await subhd.search_subs(cli, kw)
-            if not items and year:
-                items = await subhd.search_subs(cli, title)
+            items = []
+            for kw in queries:
+                items = await subhd.search_subs(cli, kw)
+                if items:
+                    break
             if not items:
-                print(f"[subtitles] subhd 无匹配结果: {title} {year or ''}")
+                print(f"[subtitles] subhd 无匹配结果: {queries}")
                 return []
             vstem = video_path.stem
             floor = min_relevance(vstem)
@@ -268,22 +309,8 @@ async def _subhd_download(video_path: Path, title: str, year: int | None,
                         saved.append(track)
                         break
     except Exception as e:
-        print(f"[subtitles] subhd 搜刮失败 {title}: {type(e).__name__} {e}")
+        print(f"[subtitles] subhd 搜刮失败 {queries}: {type(e).__name__} {e}")
     return saved
-
-
-async def _search_candidates(client: httpx.AsyncClient, token: str,
-                             title: str, year: int | None) -> list:
-    query = f"{title} {year}" if year else title
-    subs = await _search(client, token, query)
-    if not subs and year:  # 去掉年份再搜
-        subs = await _search(client, token, title)
-    if not subs and title:
-        # 英文名找不到时，去掉标点再试一次（如 The.First.Slam.Dunk）
-        alt = title.replace(".", " ").replace("_", " ").strip()
-        if alt != title:
-            subs = await _search(client, token, alt)
-    return subs
 
 
 def _pick_ep_name(names: list, video_stem: str) -> str | None:

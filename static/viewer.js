@@ -86,8 +86,11 @@ async function openDetail(key) {
   const modal = $('#detailModal');
   const heroImg = e.poster ? `<img src="${posterUrl(e.poster)}">` : '';
   // 管理端已登录时才显示维护按钮（电视上不会出现）
+  // 剧集的「搜索字幕」= 全季逐集搜索（密集行视图取消后剧集一度没有任何字幕搜索入口）
   const adminBtns = state.adminAuthed ? `
-    ${e.kind === 'movie' ? `<button class="btn" data-subs="${e.id}">搜索字幕</button>` : ''}
+    ${e.kind === 'movie'
+      ? `<button class="btn" data-subs="${e.id}">搜索字幕</button>`
+      : `<button class="btn" data-subs-show="1">搜索字幕（全季）</button>`}
     <button class="btn" data-poster="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">更换封面</button>
     <button class="btn" data-upload="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">上传封面</button>
     <button class="btn" data-rematch="${e.kind === 'movie' ? e.id : (e.episodes[0] && e.episodes[0].id)}">刷新影片信息</button>` : '';
@@ -128,6 +131,24 @@ async function openDetail(key) {
         toast(r.found ? '字幕下载成功' : '没有找到匹配字幕');
       } catch (err) { toast(err.message); }
       b.disabled = false; b.textContent = '字幕';
+    }));
+  // 剧集「搜索字幕（全季）」：逐集调字幕搜索，报告命中数
+  modal.querySelectorAll('[data-subs-show]').forEach((b) =>
+    b.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const eps = e.episodes || [];
+      if (!eps.length) return;
+      b.disabled = true;
+      let found = 0;
+      for (let i = 0; i < eps.length; i++) {
+        b.textContent = `搜索中 ${i + 1}/${eps.length}…`;
+        try {
+          const r = await api(`/api/media/${eps[i].id}/subtitle`, { method: 'POST' });
+          if (r.found) found++;
+        } catch (err) { /* 单集失败不阻断整季 */ }
+      }
+      b.disabled = false; b.textContent = '搜索字幕（全季）';
+      toast(`全季字幕搜索完成：${found}/${eps.length} 集命中`);
     }));
   modal.querySelectorAll('[data-rematch]').forEach((b) =>
     b.addEventListener('click', () => openRematch(+b.dataset.rematch)));
