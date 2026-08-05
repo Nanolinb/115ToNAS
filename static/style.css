@@ -5,8 +5,8 @@
   --border: #2a3444;
   --text: #e8edf4;
   --muted: #8b96a8;
-  --accent: #e5a00d;
-  --accent2: #f5c518;
+  --accent: #fc5e37;
+  --accent2: #ff8a66;
   --green: #3fb96c;
   --red: #e05d5d;
 }
@@ -28,11 +28,21 @@ input, select { font-family: inherit; }
   background: rgba(15, 20, 28, .92); backdrop-filter: blur(8px);
   border-bottom: 1px solid var(--border);
 }
-.logo { font-size: 18px; font-weight: 700; color: var(--accent2); white-space: nowrap; }
+.logo { font-size: 18px; font-weight: 700; color: var(--accent2); white-space: nowrap; display: flex; align-items: center; gap: 9px; }
 .logo small { color: var(--muted); font-weight: 400; font-size: 11px; margin-left: 6px; }
-/* 品牌字标：Dash Spark 蓝色加粗，Media 白色 */
-.brand-spark { color: #4da3ff; font-weight: 800; }
-.brand-media { color: #fff; font-weight: 700; }
+.logo-mark { height: 30px; width: auto; display: block; }
+/* 完整横版 lockup（鸟+PUFFIN+MEDIA+下划线一张图）：默认隐藏，仅 TV 顶栏启用
+   （tv.css），网页端保持「图标+文字」组合 */
+.logo-lockup { display: none; height: 30px; width: auto; }
+.login-logo { height: 84px; width: auto; margin-bottom: 12px; }
+/* 品牌字标：PUFFIN 白色加粗，MEDIA 橙红紫渐变 */
+.brand-puffin { color: #fff; font-weight: 800; letter-spacing: .5px; }
+.brand-media {
+  font-weight: 800; letter-spacing: .5px;
+  background: linear-gradient(120deg, #fc5e37 0%, #e13b59 55%, #8b4fc4 100%);
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent; color: transparent;
+}
 .tabs { display: flex; gap: 4px; overflow-x: auto; }
 .tab {
   background: none; border: none; color: var(--muted);
@@ -271,12 +281,15 @@ input.warn::placeholder { color: rgba(224, 93, 93, .75); }
 
 /* ---------- 登录 ---------- */
 .login-mask {
-  position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 200; background: var(--bg);
+  position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 200;
+  background: var(--bg) url(/static/brand/login-bg.png) center / cover no-repeat;
   display: flex; align-items: center; justify-content: center; padding: 20px;
 }
 .login-box {
-  width: 100%; max-width: 340px; background: var(--bg2);
+  width: 100%; max-width: 340px; background: rgba(22, 29, 41, .88);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   border: 1px solid var(--border); border-radius: 14px; padding: 32px 28px; text-align: center;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .45);
 }
 .login-box h1 { color: var(--accent2); font-size: 24px; margin-bottom: 6px; }
 .login-box p { color: var(--muted); font-size: 13px; margin-bottom: 20px; }

@@ -88,13 +88,23 @@ public class PlayerActivity extends Activity {
     private long baseSubOffSec;   // 本次 load 的对齐偏移（AAC 转码关键帧对齐）
 
     private final Handler handler = new Handler(Looper.getMainLooper());
-    // 自动隐藏菜单条时把焦点交回播放画面：否则焦点残留在看不见的按钮上，
+    // 控制条与菜单条共用同一个自动隐藏计时：任何一层有活动就整体重置，
+    // 到点两层一起消失（旧实现两个独立计时器，进度条会比菜单条晚 1-2s 消失）。
+    // 焦点交回播放画面：否则焦点残留在看不见的按钮上，
     // 再按确认键会点到隐形按钮（最坏直接「关闭」退出播放）
-    private final Runnable menuHider = () -> {
+    private final Runnable uiHider = () -> {
         menuBar.setVisibility(View.GONE);
         menuBar.clearFocus();
+        if (view.isControllerFullyVisible()) {
+            view.hideController();
+        }
         view.requestFocus();
     };
+    /** 控制 UI 有活动（唤出/按键）时调用：重置统一隐藏计时 */
+    private void pokeUi() {
+        handler.removeCallbacks(uiHider);
+        handler.postDelayed(uiHider, 6000);
+    }
     private final Runnable saver = new Runnable() {
         @Override
         public void run() {
@@ -130,7 +140,9 @@ public class PlayerActivity extends Activity {
         // 不会被重新调度，进度条永远挂屏（极米首播不复位，续播路径因
         // 先弹对话框而侥幸正常）。改为 onIsPlayingChanged 里手动管理
         view.setControllerAutoShow(false);
-        view.setControllerShowTimeoutMs(5000);
+        // PlayerView 自己的隐藏计时拉到极大：控制条/菜单条的自动隐藏统一由
+        // uiHider 管理（两层同时消失），原生计时器先触发会造成进度条晚消失
+        view.setControllerShowTimeoutMs(Integer.MAX_VALUE);
         view.setBackgroundColor(Color.BLACK);
         view.setShutterBackgroundColor(Color.BLACK);
         // 字幕样式：去掉纯黑底块，改白字黑描边（对画面遮挡更少）
@@ -238,9 +250,10 @@ public class PlayerActivity extends Activity {
         player.addListener(new Player.Listener() {
             @Override
             public void onIsPlayingChanged(boolean isPlaying) {
-                // 开播亮一下控制条（5 秒超时自动隐藏），不会永远挂屏
+                // 开播亮一下控制条（统一计时到点自动隐藏），不会永远挂屏
                 if (isPlaying) {
                     view.showController();
+                    pokeUi();
                 }
             }
 
@@ -341,12 +354,7 @@ public class PlayerActivity extends Activity {
         if (first != null) {
             first.requestFocus();
         }
-        pokeMenuBar();
-    }
-
-    private void pokeMenuBar() {
-        handler.removeCallbacks(menuHider);
-        handler.postDelayed(menuHider, 6000);
+        pokeUi();
     }
 
     /** 裸画面下按返回：确认退出弹窗，默认焦点在「取消」防误触 */
@@ -410,7 +418,7 @@ public class PlayerActivity extends Activity {
      */
     private void showTrackDialog(int type, String titleText) {
         // 弹窗打开时收起菜单条：否则弹窗抢焦点前的按键会落到菜单条按钮上
-        handler.removeCallbacks(menuHider);
+        handler.removeCallbacks(uiHider);
         menuBar.setVisibility(View.GONE);
         Tracks current = player.getCurrentTracks();
         List<Tracks.Group> groups = new ArrayList<>();
@@ -451,9 +459,9 @@ public class PlayerActivity extends Activity {
             if (!bits.isEmpty()) {
                 sb.append(" · ").append(android.text.TextUtils.join(" / ", bits));
             }
-            // 当前生效的轨道打个勾
+            // 当前生效的轨道标记（✓ 在部分电视字体里缺字形，渲染成方框，用文字最稳）
             if (groups.get(i).isSelected()) {
-                sb.append("  ✓");
+                sb.append("（当前）");
             }
             items[i + offset] = sb.toString();
         }
@@ -483,7 +491,7 @@ public class PlayerActivity extends Activity {
                 return;
             }
             // 同 showTrackDialog：弹窗打开时收起菜单条，避免按键穿透
-            handler.removeCallbacks(menuHider);
+            handler.removeCallbacks(uiHider);
             menuBar.setVisibility(View.GONE);
             String[] items = new String[eps.length()];
             final long[] ids = new long[eps.length()];
@@ -712,7 +720,7 @@ public class PlayerActivity extends Activity {
         Toast.makeText(this, "字幕" + dir + " "
                 + String.format(java.util.Locale.US, "%+.1f", userSubOffset) + "s（松手后生效）",
                 Toast.LENGTH_SHORT).show();
-        pokeMenuBar();
+        pokeUi();
         handler.removeCallbacks(subOffApplier);
         handler.postDelayed(subOffApplier, 1200);
     }
@@ -806,17 +814,75 @@ public class PlayerActivity extends Activity {
         in.close();
     }
 
+    private long seekHoldStartMs;  // 本次按住的起始时间（加速分级用，uptime 时基）
+    private long seekLastFlushMs;  // 上次真正执行 seekTo 的时间（300ms 节流）
+    private int seekTapDir;        // 点按被节流窗口挡住时记录方向（±1），UP 时补跳 10s
+
     /**
      * 在 dispatch 层拦截方向键：PlayerView 自己会把「下」「OK」等键消费成
      * 唤出控制条，Activity.onKeyDown 根本收不到（极米上按下只弹进度条的根因）。
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        int code = event.getKeyCode();
+        boolean isSeekKey = code == KeyEvent.KEYCODE_DPAD_LEFT
+                || code == KeyEvent.KEYCODE_DPAD_RIGHT;
+        // 左/右 = 进度控制（菜单条亮着时让位给按钮焦点导航）：
+        // 控制条没亮的第一下只唤出控制条；之后按住即实时跳转（trick-play）——
+        // 每 ~300ms 真正 seekTo 一步（进度条跟着走、画面跳帧反馈），
+        // 按住 4s/10s 后步进从 10s 加速到 20s/30s（≈33/66/100 秒每秒）。
+        // UP 必须消费掉：否则长按后 PlayerView 会把 UP 当成焦点按钮的点击
+        if (isSeekKey && menuBar.getVisibility() != View.VISIBLE) {
+            if (event.getAction() == KeyEvent.ACTION_DOWN) {
+                if (!view.isControllerFullyVisible() && event.getRepeatCount() == 0) {
+                    view.showController();
+                    pokeUi();
+                    return true;
+                }
+                if (event.getRepeatCount() == 0) {
+                    seekHoldStartMs = event.getEventTime();
+                }
+                long holdMs = event.getEventTime() - seekHoldStartMs;
+                // 持续按住 4s 开始加速：10s → 20s；10s 后再上一档 30s
+                long step = holdMs >= 10000 ? 30000 : holdMs >= 4000 ? 20000 : 10000;
+                int dir = code == KeyEvent.KEYCODE_DPAD_RIGHT ? 1 : -1;
+                if (event.getEventTime() - seekLastFlushMs >= 300) {
+                    doSeek(dir * step, event.getEventTime());
+                    seekTapDir = 0;
+                } else if (event.getRepeatCount() == 0) {
+                    seekTapDir = dir; // 点按撞上节流窗口：记住方向，UP 时补跳
+                }
+                view.showController();
+                pokeUi(); // 重置统一自动隐藏计时
+                return true;
+            }
+            if (event.getAction() == KeyEvent.ACTION_UP) {
+                if (seekTapDir != 0) {
+                    doSeek(seekTapDir * 10000, event.getEventTime());
+                    seekTapDir = 0;
+                }
+                return true;
+            }
+        }
         if (event.getAction() == KeyEvent.ACTION_DOWN && event.getRepeatCount() == 0
                 && handleKey(event.getKeyCode())) {
             return true;
         }
         return super.dispatchKeyEvent(event);
+    }
+
+    /** 真正执行一次 seekTo（钳在 [0, 时长-0.5s]），并记录节流时间 */
+    private void doSeek(long deltaMs, long nowMs) {
+        if (player == null) {
+            return;
+        }
+        long target = player.getCurrentPosition() + deltaMs;
+        long dur = player.getDuration();
+        if (dur > 0) {
+            target = Math.min(target, Math.max(0, dur - 500));
+        }
+        player.seekTo(Math.max(0, target));
+        seekLastFlushMs = nowMs;
     }
 
     /** 返回 true = 已消费；false = 交回默认分发（按钮焦点导航/控制条按键） */
@@ -834,7 +900,7 @@ public class PlayerActivity extends Activity {
                 case KeyEvent.KEYCODE_DPAD_RIGHT:
                 case KeyEvent.KEYCODE_DPAD_UP:
                 case KeyEvent.KEYCODE_DPAD_DOWN:
-                    pokeMenuBar();
+                    pokeUi();
                     return false;
                 default:
                     return false;
@@ -865,30 +931,30 @@ public class PlayerActivity extends Activity {
                 }
                 showMenuBar();
                 return true;
-            case KeyEvent.KEYCODE_DPAD_UP:
             case KeyEvent.KEYCODE_DPAD_CENTER:
             case KeyEvent.KEYCODE_ENTER:
-                // 上 / OK：唤出原生控制器（播放/暂停/进度条）；已亮则交给控制条
+                // OK：控制条没亮时——播放中立即暂停并亮出控制条（呈现暂停状态），
+                // 暂停中则续播；控制条已亮则交给控制条按钮（默认焦点在播放/暂停钮）
                 if (!view.isControllerFullyVisible()) {
                     view.showController();
+                    pokeUi();
+                    if (player.isPlaying()) {
+                        player.pause();
+                    } else {
+                        player.play();
+                    }
                     return true;
                 }
                 return false;
-            case KeyEvent.KEYCODE_DPAD_LEFT:
-            case KeyEvent.KEYCODE_DPAD_RIGHT:
-                // 控制条没亮：第一下左/右只唤出控制条，不跳转；
-                // 控制条亮着：左右 = 快退/快进 10 秒并重置自动隐藏计时
+            case KeyEvent.KEYCODE_DPAD_UP:
+                // 上：唤出原生控制器（播放/暂停/进度条）；已亮则交给控制条
                 if (!view.isControllerFullyVisible()) {
                     view.showController();
+                    pokeUi();
                     return true;
                 }
-                if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) {
-                    player.seekBack();
-                } else {
-                    player.seekForward();
-                }
-                view.showController();
-                return true;
+                return false;
+            // 左/右在 dispatchKeyEvent 里统一处理（按住 trick-play 实时跳转）
             default:
                 return false;
         }

@@ -21,7 +21,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 /**
- * Dash Spark Media · 观影端 TV 壳：
+ * Puffin Media · 观影端 TV 壳：
  * - WebView 加载 NAS 上的观影页（海报墙/搜索/过滤）
  * - 播放走内嵌 ExoPlayer（应用内全屏，电视/投影硬解，可选音轨/字幕，
  *   音轨解不了自动回落服务端 AAC 转码），不跳外部 App
@@ -295,7 +295,7 @@ public class MainActivity extends Activity {
                     }
                     new AlertDialog.Builder(this)
                             .setTitle("退出")
-                            .setMessage("确定退出 Dash Spark Media？")
+                            .setMessage("确定退出 Puffin Media？")
                             .setPositiveButton("退出", (d, w) -> finish())
                             .setNegativeButton("取消", null)
                             .show();

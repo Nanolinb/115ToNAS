@@ -21,3 +21,5 @@ android/build/
 tests/tvweb/venv/
 tests/tvweb/shot-*.png
 tests/tvweb/__pycache__/
+temp/
+android/local.properties
