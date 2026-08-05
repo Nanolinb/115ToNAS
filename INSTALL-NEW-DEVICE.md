@@ -2,7 +2,7 @@
 
 本文记录把 Dash Spark Media 安装到新设备的完整步骤，2026-07-30 以
 极米 RS10 投影仪 + QNAP TS-464C 为例编写。备份包制作方式：
-电视端 `adb pull` APK；NAS 端打包 `/share/Container/115-media-hub`
+电视端 `adb pull` APK；NAS 端打包 `/share/CACHEDEV1_DATA/Container/115-media-hub`
 （数据库用 SQLite backup API 做一致性快照，见仓库备份记录）。
 
 ## 一、QNAP 部署服务端（TS-464C）
@@ -11,20 +11,20 @@
 （默认 `/share/Multimedia`，没有就在 File Station 建一个，或后续改 compose）。
 
 1. **拷贝项目文件**：备份包 `115-media-hub-backup-vX.XX.XX.tar.gz`
-   传到 464C 的 `/share/Container/` 下解压：
+   传到 464C 的 `/share/CACHEDEV1_DATA/Container/` 下解压：
 
    ```bash
-   cd /share/Container && tar xzf 115-media-hub-backup-vX.XX.XX.tar.gz
+   cd /share/CACHEDEV1_DATA/Container && tar xzf 115-media-hub-backup-vX.XX.XX.tar.gz
    ```
 
-   得到 `/share/Container/115-media-hub/`。也可以直接 `git clone`
+   得到 `/share/CACHEDEV1_DATA/Container/115-media-hub/`。也可以直接 `git clone`
    仓库——备份包的好处是连数据库一起带过来。
 
 2. **（可选）迁移旧数据**：要用备份里的数据库（影片库、115 登录态）
    而不是从零开始：
 
    ```bash
-   cd /share/Container/115-media-hub/config
+   cd /share/CACHEDEV1_DATA/Container/115-media-hub/config
    mv secret-backup.key secret.key && chmod 600 secret.key
    mv data-snapshot.db data.db   # 一致性快照覆盖，WAL 残件删掉
    rm -f data.db-shm data.db-wal
@@ -39,7 +39,7 @@
 4. **构建启动**（SSH 进 NAS）：
 
    ```bash
-   cd /share/Container/115-media-hub
+   cd /share/CACHEDEV1_DATA/Container/115-media-hub
    docker compose build
    docker compose up -d
    ```

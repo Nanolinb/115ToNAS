@@ -5,12 +5,23 @@
 
 ## 部署方式
 
-1. 代码放在 `/share/Container/115-media-hub`，`config/` 子目录存数据库与密钥
+1. 代码放在 **`/share/CACHEDEV1_DATA/Container/115-media-hub`**（真实存储卷），
+   `config/` 子目录存数据库与密钥
 2. Container Station（docker 27.x）构建镜像：`docker compose build`
 3. 启动：`docker compose up -d`，端口 8115
 4. 构建期网络：Docker Hub 直连不通时使用 DaoCloud 镜像源
-   （`docker.m.daocloud.io/library/python:3.12-slim`）+ 清华 PyPI 镜像 +
-   清华 Debian 源（NAS 上的 Dockerfile 已按此适配）
+   （`docker.m.daocloud.io/library/python:3.12-slim`）；
+   Debian/PyPI 包走 `BUILD_PROXY` 构建参数指定的代理（默认 NAS 上的 mihomo）
+
+### ⚠️ 路径陷阱：/share 是 16MB tmpfs（2026-08-05 实踩）
+
+**`/share` 本身是内存盘**，上面只有 QTS 自动建的共享文件夹符号链接。
+`/share/Container` 不是注册的共享文件夹——一次重启后符号链接消失，docker 按
+bind 源路径自动创建了**真实的 tmpfs 目录**，之后所有部署/数据库都写进了内存盘
+（占满 /share tmpfs 触发「RamDisk 空间不足」系统告警；真断电重启会全丢）。
+修复：项目整体迁到真实卷 `/share/CACHEDEV1_DATA/Container/115-media-hub`，
+compose/部署/docker cp 全部用真实绝对路径，不再经过 /share 符号链接。
+**在任何新 QNAP 上部署时，直接使用 `/share/CACHEDEV1_DATA/...` 真实路径。**
 
 ## 网络适配（重点）
 
@@ -58,12 +69,12 @@ api.themoviedb.org 在国内被墙，直连不可用。可选方案：
 ```bash
 # NAS 上 docker 命令前缀（Dash 等非 root 用户）
 export PATH=/share/CACHEDEV1_DATA/.qpkg/container-station/usr/bin:$PATH
-export DOCKER_CONFIG=/share/Container/115-media-hub/.docker
+export DOCKER_CONFIG=/share/CACHEDEV1_DATA/Container/115-media-hub/.docker
 export HOME=/tmp
 
 docker logs media-hub-115 --tail 50     # 看日志
 docker restart media-hub-115            # 重启
-cd /share/Container/115-media-hub && docker compose up -d --build   # 更新代码后重建
+cd /share/CACHEDEV1_DATA/Container/115-media-hub && docker compose up -d --build   # 更新代码后重建
 ```
 
 注意：非 root 用户必须设置 `DOCKER_CONFIG` 与 `HOME` 到可写目录，
