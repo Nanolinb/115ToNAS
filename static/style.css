@@ -211,6 +211,10 @@ main { padding: 20px; max-width: 1400px; margin: 0 auto; }
 .seek-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; background: var(--accent2); border-radius: 4px; }
 .seek-time { color: #999; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 video.transcode::-webkit-media-controls-timeline { display: none; }
+/* 转码流里 Chrome 原生时间显示也是错的（流内相对秒数 + 按缓冲量估出的假时长，
+   每次重起流就刷新）：一并隐藏，正确时间看自绘条的 #seekTime */
+video.transcode::-webkit-media-controls-current-time-display,
+video.transcode::-webkit-media-controls-time-remaining-display { display: none; }
 .player-bar { display: flex; gap: 10px; padding: 10px 14px; align-items: center; flex-wrap: wrap; }
 .playlist-panel { max-height: 32vh; overflow-y: auto; background: #0d0d0d; padding: 6px 10px; border-top: 1px solid #222; }
 .playlist-panel .pl-row { display: flex; gap: 10px; padding: 7px 8px; color: #bbb; font-size: 13px; border-radius: 6px; cursor: pointer; align-items: center; }

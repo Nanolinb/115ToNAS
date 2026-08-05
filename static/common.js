@@ -176,7 +176,10 @@ async function playMedia(id) {
     : badCodecs.length > 0;
   setupAudioMenu(video, id, info, useTranscode, nativeSwitch);
 
-  // Mac 上：容器不支持 或 音频编码浏览器解不了 → 提供「用 IINA 打开」（直接拉起）
+  // 浏览器原生播放器解不了时的外挂播放器出口，按系统分：
+  // Mac → IINA（iina:// 拉起）；Windows → KMPlayer（无官方 URL scheme，
+  // 复制直链 + 尝试拉起 + toast 指引粘贴）
+  const isWin = /Windows/.test(navigator.userAgent);
   const iinaBtn = $('#btnIina');
   if (isMac && (!nativeOk || badCodecs.length)) {
     iinaBtn.classList.remove('hidden');
@@ -185,12 +188,26 @@ async function playMedia(id) {
       toast('正在拉起 IINA…（若没反应：链接已复制，IINA 里 ⌘U 粘贴即可）', 3500);
       window.location.href = 'iina://open?url=' + encodeURIComponent(playUrl);
     };
+  } else if (isWin && (!nativeOk || badCodecs.length)) {
+    iinaBtn.textContent = '🪟 用 KMPlayer 打开';
+    iinaBtn.classList.remove('hidden');
+    iinaBtn.onclick = async () => {
+      try { await navigator.clipboard.writeText(playUrl); } catch (e) {}
+      toast('链接已复制：KMPlayer 里「打开 URL」粘贴即可播放（没自动拉起属正常）', 4000);
+      // KMPlayer 无官方 scheme，部分版本注册了 kmplayer://；用隐藏 iframe
+      // 尝试拉起，避免未注册时浏览器整页跳转报错
+      const f = document.createElement('iframe');
+      f.style.display = 'none';
+      f.src = 'kmplayer://' + playUrl;
+      document.body.appendChild(f);
+      setTimeout(() => f.remove(), 2000);
+    };
   } else {
     iinaBtn.classList.add('hidden');
   }
   if (badCodecs.length) {
     toast(`音频编码 ${[...new Set(badCodecs)].join(' / ')} 浏览器无法解码 → ` +
-      '已实时转码 AAC 播放（拖动进度条会重新起流）；要原始音轨可用 IINA / 电视播放器', 5000);
+      '已实时转码 AAC 播放（拖动进度条会重新起流）；要原始音轨可用本地播放器 / 电视播放器', 5000);
   }
   // Safari 对流式转码 fMP4 支持不可靠：直接指路 IINA（Mac）或 Chrome
   if (IS_SAFARI && (badCodecs.length || !nativeOk)) {
@@ -293,11 +310,17 @@ function updateSeekFill(video) {
 }
 
 // 转码流从 t 秒重起后时间轴从 0 开始，字幕却是原片绝对时间：
-// base 一变就刷新字幕轨地址，让服务端把 cue 整体前移 base 秒
+// base 一变就刷新字幕轨地址，让服务端把 cue 整体前移 base 秒。
+// 注意按各自端点重写：外挂轨 /api/subtitle（ass 必须保留 fmt=vtt——丢了它
+// 服务端回 ass 原文，浏览器解析不了 = 字幕对不上/消失）；内嵌轨 /api/esub
+// 有自己的端点，指到 /api/subtitle 会串到别的轨或 404
 function syncSubOffset(video, id) {
   const base = parseFloat(video.dataset.base || '0');
-  video.querySelectorAll('track').forEach((tr, i) => {
-    tr.src = `/api/subtitle/${id}/${i}` + (base > 0 ? `?offset=${base}` : '');
+  video.querySelectorAll('track').forEach((tr) => {
+    const m = (tr.src || '').match(/\/api\/(subtitle|esub)\/(\d+)\/(\d+)/);
+    if (!m) return;
+    const fmt = tr.src.indexOf('fmt=vtt') >= 0 ? '&fmt=vtt' : '';
+    tr.src = `/api/${m[1]}/${m[2]}/${m[3]}?offset=${base}${fmt}`;
   });
 }
 
