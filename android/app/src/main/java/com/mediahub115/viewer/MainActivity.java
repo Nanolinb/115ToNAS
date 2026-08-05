@@ -80,9 +80,27 @@ public class MainActivity extends Activity {
         if (server.isEmpty()) {
             showServerDialog(null);
         } else {
-            log("loadUrl " + server);
-            web.loadUrl(server + "/");
+            loadServer(server);
         }
+    }
+
+    private final android.os.Handler handler =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+    private Runnable loadWatchdog;
+
+    /** 加载服务器首页 + 看门狗：12 秒没完事就当地址错了，停掉加载弹回输入框 */
+    private void loadServer(String server) {
+        log("loadUrl " + server);
+        if (loadWatchdog != null) {
+            handler.removeCallbacks(loadWatchdog);
+        }
+        loadWatchdog = () -> {
+            web.stopLoading();
+            log("load timeout");
+            showServerDialog("连接超时：服务器地址错误或 NAS 不在线，请重新输入");
+        };
+        handler.postDelayed(loadWatchdog, 12000);
+        web.loadUrl(server + "/");
     }
 
     private void setupWebView() {
@@ -129,14 +147,17 @@ public class MainActivity extends Activity {
             public void onReceivedError(WebView view, WebResourceRequest request,
                                         WebResourceError error) {
                 if (request.isForMainFrame()) {
+                    handler.removeCallbacks(loadWatchdog);
                     log("page error: " + error.getErrorCode() + " " + error.getDescription());
-                    showServerDialog("连不上服务器，请检查 NAS 是否在线、地址是否正确");
+                    showServerDialog("服务器地址错误或无法连接（" + error.getDescription()
+                            + "），请重新输入");
                 }
             }
 
             @Override
             public void onPageFinished(WebView view, String url) {
-                // 活到这 = 本次启动没崩，清掉面包屑
+                // 活到这 = 本次启动没崩，撤看门狗、清面包屑
+                handler.removeCallbacks(loadWatchdog);
                 BootLog.clear(MainActivity.this);
             }
 
@@ -148,7 +169,7 @@ public class MainActivity extends Activity {
                 setupWebView();
                 String server = sp.getString(KEY_SERVER, "");
                 if (!server.isEmpty()) {
-                    web.loadUrl(server + "/");
+                    loadServer(server);
                 }
                 return true;
             }
@@ -173,50 +194,54 @@ public class MainActivity extends Activity {
     }
 
     /** 服务器地址设置弹窗（首次启动 / 连接失败 / 按菜单键时弹出）。
-     *  IP 与端口分开填：前缀默认 192.168.（可改，如 Tailscale 100.x）、
-     *  只需补后两段；端口默认 8115，一般不用动。 */
+     *  四段 IP + 端口分栏数字输入（九宫格）：前两段预填 192/168（可改，
+     *  Tailscale 等网段直接改）；每段满 3 位、或两位已超 25（再加任何数字
+     *  都超 255）自动跳下一段；端口预填 8115 一般不用动。
+     *  地址连不上：12 秒看门狗或加载报错都会弹回本框并提示。 */
     private void showServerDialog(String err) {
-        // 解析已存地址：前缀(前两段) / 第三段 / 第四段 / 端口
-        String prefix = "192.168.", o3 = "", o4 = "", port = "8115";
+        String[] oct = {"192", "168", "", ""};
+        String port = "8115";
         java.util.regex.Matcher m = java.util.regex.Pattern.compile(
                 "^https?://(\\d+)\\.(\\d+)\\.(\\d+)\\.(\\d+)(?::(\\d+))?/?$")
                 .matcher(sp.getString(KEY_SERVER, ""));
         if (m.matches()) {
-            prefix = m.group(1) + "." + m.group(2) + ".";
-            o3 = m.group(3);
-            o4 = m.group(4);
+            for (int i = 0; i < 4; i++) {
+                oct[i] = m.group(i + 1);
+            }
             if (m.group(5) != null) {
                 port = m.group(5);
             }
         }
 
-        final EditText inPrefix = new EditText(this);
-        inPrefix.setText(prefix);
-        inPrefix.setInputType(InputType.TYPE_CLASS_TEXT);
-        final EditText inO3 = new EditText(this);
-        inO3.setHint("x");
-        inO3.setText(o3);
-        inO3.setInputType(InputType.TYPE_CLASS_NUMBER);
-        final EditText inO4 = new EditText(this);
-        inO4.setHint("x");
-        inO4.setText(o4);
-        inO4.setInputType(InputType.TYPE_CLASS_NUMBER);
-        final EditText inPort = new EditText(this);
-        inPort.setText(port);
-        inPort.setInputType(InputType.TYPE_CLASS_NUMBER);
-
-        TextView dot = new TextView(this);
-        dot.setText(".");
-        TextView colon = new TextView(this);
-        colon.setText(":");
+        final EditText[] seg = new EditText[5];  // 0-3 = IP 四段，4 = 端口
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
-        row.addView(inPrefix, new LinearLayout.LayoutParams(0, -2, 4f));
-        row.addView(inO3, new LinearLayout.LayoutParams(0, -2, 2f));
-        row.addView(dot);
-        row.addView(inO4, new LinearLayout.LayoutParams(0, -2, 2f));
-        row.addView(colon);
-        row.addView(inPort, new LinearLayout.LayoutParams(0, -2, 3f));
+        row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        for (int i = 0; i < 5; i++) {
+            final EditText e = new EditText(this);
+            e.setInputType(InputType.TYPE_CLASS_NUMBER);
+            e.setText(i < 4 ? oct[i] : port);
+            e.setSelectAllOnFocus(true);
+            seg[i] = e;
+            row.addView(e, new LinearLayout.LayoutParams(0, -2, i == 4 ? 3f : 2.2f));
+            if (i < 4) {
+                final int idx = i;
+                e.addTextChangedListener(new android.text.TextWatcher() {
+                    public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+                    public void onTextChanged(CharSequence s, int a, int b, int c) { }
+                    public void afterTextChanged(android.text.Editable s) {
+                        String v = s.toString();
+                        if (v.length() == 3
+                                || (v.length() == 2 && Integer.parseInt(v) > 25)) {
+                            seg[idx + 1].requestFocus();
+                        }
+                    }
+                });
+                TextView sep = new TextView(this);
+                sep.setText(i < 3 ? "." : ":");
+                row.addView(sep);
+            }
+        }
 
         final CheckBox soft = new CheckBox(this);
         soft.setText("兼容模式（白屏闪退时勾选）");
@@ -225,40 +250,49 @@ public class MainActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.addView(row);
         box.addView(soft);
-        new AlertDialog.Builder(this)
+        AlertDialog dlg = new AlertDialog.Builder(this)
                 .setTitle("NAS 服务器地址")
                 .setMessage(err == null
-                        ? "首次使用：输入 NAS 的 IP 后两段与端口（默认 8115）"
+                        ? "首次使用：输入 NAS 的 IP 与端口（默认 8115）"
                         : err + "\n\n请确认地址：")
                 .setView(box)
-                .setPositiveButton("连接", (d, w) -> {
-                    String pre = inPrefix.getText().toString().trim();
-                    String ip;
-                    if (inO3.getText().toString().trim().isEmpty()
-                            && inO4.getText().toString().trim().isEmpty()) {
-                        ip = pre;  // 后两段留空 = 前缀框里就是完整 IP（老用户习惯）
-                    } else {
-                        if (!pre.endsWith(".")) {
-                            pre += ".";
-                        }
-                        ip = pre + inO3.getText().toString().trim()
-                                + "." + inO4.getText().toString().trim();
-                    }
-                    String p = inPort.getText().toString().trim();
-                    if (p.isEmpty()) {
-                        p = "8115";
-                    }
-                    String url = "http://" + ip + ":" + p;
-                    sp.edit().putString(KEY_SERVER, url)
-                            .putBoolean(KEY_SOFT_RENDER, soft.isChecked()).apply();
-                    log("loadUrl " + url + ", softRender=" + soft.isChecked());
-                    // 软渲染开关变了要重建 WebView 才生效
-                    setupWebView();
-                    web.loadUrl(url + "/");
-                })
+                .setPositiveButton("连接", null)  // 点击逻辑 show 后接管：校验不过不关窗
                 .setNegativeButton("取消", null)
                 .setCancelable(false)
                 .show();
+        dlg.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            StringBuilder ip = new StringBuilder();
+            for (int i = 0; i < 4; i++) {
+                int n;
+                try {
+                    n = Integer.parseInt(seg[i].getText().toString().trim());
+                } catch (NumberFormatException ex) {
+                    n = -1;
+                }
+                if (n < 0 || n > 255) {
+                    android.widget.Toast.makeText(this,
+                            "IP 第 " + (i + 1) + " 段不对（0-255）",
+                            android.widget.Toast.LENGTH_SHORT).show();
+                    seg[i].requestFocus();
+                    return;
+                }
+                if (i > 0) {
+                    ip.append('.');
+                }
+                ip.append(n);
+            }
+            String p = seg[4].getText().toString().trim();
+            if (p.isEmpty()) {
+                p = "8115";
+            }
+            String url = "http://" + ip + ":" + p;
+            sp.edit().putString(KEY_SERVER, url)
+                    .putBoolean(KEY_SOFT_RENDER, soft.isChecked()).apply();
+            dlg.dismiss();
+            // 软渲染开关变了要重建 WebView 才生效
+            setupWebView();
+            loadServer(url);
+        });
     }
 
     @Override
